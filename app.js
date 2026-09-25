@@ -1,5 +1,5 @@
 /* ============================================================
-   Fast S — Complete Chat App (Firestore-only)
+   Fast S — Complete Chat App (Firestore-only, no Storage)
    ============================================================ */
 
 // ===== Firebase =====
@@ -13,13 +13,8 @@ import {
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc,
   collection, addDoc, query, where, orderBy, limit, onSnapshot,
-  serverTimestamp, getDocs, arrayUnion, arrayRemove, writeBatch,
-  increment, startAfter, endAt, startAt, documentId
+  serverTimestamp, getDocs, arrayUnion, arrayRemove, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import {
-  getStorage, ref as storageRef, uploadBytes, getDownloadURL,
-  deleteObject
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCX7u6tAmK-k-6Oq-S7DNhU74MyyfT38Uw",
@@ -36,7 +31,6 @@ const fbApp = initializeApp(firebaseConfig);
 try { getAnalytics(fbApp); } catch(e){}
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
-const storage = getStorage(fbApp);
 
 // ===== State =====
 const S = {
@@ -57,15 +51,17 @@ const S = {
   presenceTimer: null,
   typingTimer: null,
   currentView: 'chats',
+  currentViewOpts: {},
   replyTo: null,
   ctxTarget: null,
   userCache: {}
 };
 
-// ===== Utils =====
+// ===== DOM Helpers =====
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// ===== Utils =====
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -89,6 +85,12 @@ function formatTime(ts) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes < 1024) return (bytes || 0) + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
 function debounce(fn, delay) {
   let t;
   return function (...args) {
@@ -102,7 +104,10 @@ function toast(msg, type = '') {
   el.className = 'toast ' + type;
   el.textContent = msg;
   $('#toast-container').appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2600);
+  setTimeout(() => {
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 300);
+  }, 2600);
 }
 
 function showModal(title, bodyHtml, onOk, okText = 'OK') {
@@ -110,8 +115,13 @@ function showModal(title, bodyHtml, onOk, okText = 'OK') {
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = bodyHtml;
   $('#modal-ok').textContent = okText;
+  $('#modal-ok').classList.remove('hidden');
   modal.classList.remove('hidden');
-  const cleanup = () => { modal.classList.add('hidden'); $('#modal-ok').onclick = null; $('#modal-cancel').onclick = null; };
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    $('#modal-ok').onclick = null;
+    $('#modal-cancel').onclick = null;
+  };
   $('#modal-ok').onclick = () => { const r = onOk && onOk(); if (r !== false) cleanup(); };
   $('#modal-cancel').onclick = cleanup;
 }
@@ -125,7 +135,56 @@ function showAuth(show = true) { $('#auth-screen').classList.toggle('hidden', !s
 function showMain(show = true) { $('#main-screen').classList.toggle('hidden', !show); }
 
 function avatarUrl(profile) {
-  return profile?.photoURL || `https://ui-avatars.com/api/?background=7b2ff7&color=fff&bold=true&name=${encodeURIComponent(profile?.displayName || profile?.username || '?')}`;
+  if (profile?.photoURL) return profile.photoURL;
+  const name = profile?.displayName || profile?.username || '?';
+  return `https://ui-avatars.com/api/?background=7b2ff7&color=fff&bold=true&name=${encodeURIComponent(name)}`;
+}
+
+// ===== File Helpers (Base64, no Storage) =====
+const FILE_MAX = 500 * 1024;      // 500KB for non-image files
+const IMAGE_MAX = 1024 * 1024;    // 1MB source image (gets compressed)
+const DOC_MAX = 700 * 1024;       // Firestore doc size safety limit
+
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function compressImage(file, maxWidth = 800, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        if (width > maxWidth) {
+          height = Math.round((maxWidth / width) * height);
+          width = maxWidth;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        // Try decreasing quality to fit under limit
+        let q = quality;
+        let dataUrl = canvas.toDataURL('image/jpeg', q);
+        while (dataUrl.length > DOC_MAX && q > 0.3) {
+          q -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', q);
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
 }
 
 // ===== Theme =====
@@ -139,60 +198,66 @@ function initTheme() {
   };
 }
 
-// ===== Router / Back Button =====
+// ===== Router =====
 const router = {
   stack: [],
   go(view, opts = {}) {
     const prev = S.currentView;
-    if (prev && prev !== view) this.stack.push({ view: prev, opts: S.currentViewOpts || {} });
+    if (prev && prev !== view) {
+      this.stack.push({ view: prev, opts: S.currentViewOpts || {} });
+    }
     S.currentViewOpts = opts;
     this.render(view, opts);
     history.pushState({ view, opts }, '', '#' + view);
-  },
-  back() {
-    const prev = this.stack.pop();
-    if (prev) {
-      S.currentViewOpts = prev.opts;
-      this.render(prev.view, prev.opts);
-      history.pushState({ view: prev.view, opts: prev.opts }, '', '#' + prev.view);
-    }
   },
   render(view, opts = {}) {
     S.currentView = view;
     $$('.view').forEach(v => v.classList.add('hidden'));
     $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
 
-    if (view === 'chats')       renderChats();
-    if (view === 'friends')     renderFriends();
-    if (view === 'search')      renderSearch();
-    if (view === 'profile')     renderProfile();
-    if (view === 'chat')        renderChatView(opts.chatId);
+    if (view === 'chats')   renderChats();
+    if (view === 'friends') renderFriends();
+    if (view === 'search')  renderSearch();
+    if (view === 'profile') renderProfile();
+    if (view === 'chat')    renderChatView(opts.chatId);
 
-    // Back button visibility
     $('#back-btn').classList.toggle('hidden', !['chat'].includes(view));
 
-    // Topbar title
-    const titles = { chats:'Fast S', friends:'Friends', search:'Find People', profile:'Profile', chat: opts.title || 'Chat' };
+    const titles = {
+      chats: 'Fast S', friends: 'Friends', search: 'Find People',
+      profile: 'Profile', chat: opts.title || 'Chat'
+    };
     $('#topbar-title').textContent = titles[view] || 'Fast S';
-
-    // bottom nav visibility in chat
     $('#bottom-nav').classList.toggle('hidden', view === 'chat');
   }
 };
 
 function initBackButton() {
-  history.replaceState({ view: S.currentView }, '', '#' + S.currentView);
+  history.replaceState({ view: 'chats' }, '', '#chats');
   window.addEventListener('popstate', (e) => {
     const st = e.state;
-    if (!st) { history.pushState({ view: 'chats' }, '', '#chats'); router.render('chats'); return; }
-    if (st.view === 'chats' && S.currentView === 'chats') return;
+    if (!st) {
+      history.pushState({ view: 'chats' }, '', '#chats');
+      router.render('chats');
+      return;
+    }
+    if (st.view === 'chat') {
+      // Coming back into chat? Then just go to chats
+      router.render('chats');
+      return;
+    }
+    if (S.currentView === 'chat') closeActiveChat();
     router.render(st.view, st.opts || {});
   });
+
   $('#back-btn').onclick = () => {
     if (S.currentView === 'chat') {
       closeActiveChat();
+      history.pushState({ view: 'chats' }, '', '#chats');
+      router.render('chats');
+    } else {
+      history.back();
     }
-    history.back();
   };
 }
 
@@ -200,7 +265,6 @@ function initBackButton() {
 // AUTH
 // ============================================================
 async function initAuth() {
-  // Tabs
   $$('.auth-tab').forEach(t => t.onclick = () => {
     $$('.auth-tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
@@ -225,13 +289,15 @@ async function initAuth() {
     const username = $('#signup-username').value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
     const email = $('#signup-email').value.trim();
     const pass = $('#signup-password').value;
+
     if (name.length < 2) return showAuthError('Name too short');
-    if (username.length < 3) return showAuthError('Username must be at least 3 chars');
-    if (pass.length < 6) return showAuthError('Password must be at least 6 chars');
+    if (username.length < 3) return showAuthError('Username must be at least 3 characters');
+    if (pass.length < 6) return showAuthError('Password must be at least 6 characters');
+
     try {
-      // check username availability
       const uSnap = await getDoc(doc(db, 'usernames', username));
       if (uSnap.exists()) return showAuthError('Username already taken');
+
       const cred = await createUserWithEmailAndPassword(auth, email, pass);
       await fbUpdateProfile(cred.user, { displayName: name });
       await createUserDoc(cred.user, name, username);
@@ -242,14 +308,13 @@ async function initAuth() {
     try {
       const provider = new GoogleAuthProvider();
       const cred = await signInWithPopup(auth, provider);
-      // Ensure user doc
       const uSnap = await getDoc(doc(db, 'users', cred.user.uid));
       if (!uSnap.exists()) {
         const base = (cred.user.email?.split('@')[0] || 'user').toLowerCase().replace(/[^a-z0-9_]/g, '');
-        let username = base;
+        let username = base || 'user';
         let i = 1;
         while ((await getDoc(doc(db, 'usernames', username))).exists()) {
-          username = base + i++;
+          username = base + (i++);
         }
         await createUserDoc(cred.user, cred.user.displayName || username, username);
       }
@@ -258,36 +323,51 @@ async function initAuth() {
 
   $('#forgot-link').onclick = (e) => {
     e.preventDefault();
-    showModal('Reset Password', `
-      <input type="email" id="reset-email" placeholder="Your email" style="width:100%">
-    `, async () => {
-      const em = $('#reset-email').value.trim();
-      if (!em) return false;
-      try {
-        await sendPasswordResetEmail(auth, em);
-        toast('Reset email sent! Check your inbox.', 'success');
-      } catch (err) { toast(authErrorMsg(err), 'error'); }
-    }, 'Send');
+    showModal('Reset Password',
+      `<input type="email" id="reset-email" placeholder="Your email">`,
+      async () => {
+        const em = $('#reset-email').value.trim();
+        if (!em) return false;
+        try {
+          await sendPasswordResetEmail(auth, em);
+          toast('Reset email sent! Check your inbox.', 'success');
+        } catch (err) { toast(authErrorMsg(err), 'error'); }
+      }, 'Send');
   };
 
   onAuthStateChanged(auth, async (user) => {
     if (user) {
       S.user = user;
       await loadUserProfile();
-      showLoader(false); showAuth(false); showMain(true);
+      showLoader(false);
+      showAuth(false);
+      showMain(true);
       startAllListeners();
     } else {
-      S.user = null; S.profile = null;
+      S.user = null;
+      S.profile = null;
       stopAllListeners();
-      showLoader(false); showMain(false); showAuth(true);
+      showLoader(false);
+      showMain(false);
+      showAuth(true);
     }
   });
 }
 
 function authErrorMsg(err) {
-  const m = { 'auth/invalid-email':'Invalid email','auth/user-not-found':'User not found','auth/wrong-password':'Wrong password','auth/email-already-in-use':'Email already in use','auth/weak-password':'Weak password (6+ chars)','auth/popup-closed-by-user':'Sign-in cancelled','auth/invalid-credential':'Invalid credentials' };
+  const m = {
+    'auth/invalid-email': 'Invalid email',
+    'auth/user-not-found': 'User not found',
+    'auth/wrong-password': 'Wrong password',
+    'auth/email-already-in-use': 'Email already in use',
+    'auth/weak-password': 'Weak password (6+ characters)',
+    'auth/popup-closed-by-user': 'Sign-in cancelled',
+    'auth/invalid-credential': 'Invalid email or password',
+    'auth/network-request-failed': 'Network error — check internet'
+  };
   return m[err.code] || err.message;
 }
+
 function showAuthError(msg) {
   const el = $('#auth-error');
   el.textContent = msg;
@@ -323,7 +403,6 @@ async function loadUserProfile() {
   if (snap.exists()) {
     S.profile = snap.data();
     S.userCache[S.user.uid] = S.profile;
-    // Start profile listener
     if (S.unsubProfile) S.unsubProfile();
     S.unsubProfile = onSnapshot(doc(db, 'users', S.user.uid), (d) => {
       if (d.exists()) {
@@ -337,12 +416,11 @@ async function loadUserProfile() {
 }
 
 function updateTopbarAvatar() {
-  const url = avatarUrl(S.profile);
-  $('#topbar-avatar').src = url;
+  $('#topbar-avatar').src = avatarUrl(S.profile);
 }
 
 async function getUser(uid) {
-  if (S.userCache[uid] && S.userCache[uid].__cached) return S.userCache[uid];
+  if (S.userCache[uid]) return S.userCache[uid];
   const snap = await getDoc(doc(db, 'users', uid));
   if (snap.exists()) {
     const data = snap.data();
@@ -353,13 +431,16 @@ async function getUser(uid) {
 }
 
 // ============================================================
-// PRESENCE (Firestore heartbeat)
+// PRESENCE
 // ============================================================
 function startPresence() {
   const userRef = doc(db, 'users', S.user.uid);
-  const beat = () => updateDoc(userRef, { online: true, lastSeen: serverTimestamp() }).catch(()=>{});
+  const beat = () => updateDoc(userRef, {
+    online: true, lastSeen: serverTimestamp()
+  }).catch(() => {});
   beat();
   S.presenceTimer = setInterval(beat, 30000);
+
   window.addEventListener('beforeunload', () => {
     updateDoc(userRef, { online: false, lastSeen: serverTimestamp() }).catch(()=>{});
   });
@@ -370,7 +451,11 @@ function startPresence() {
     }).catch(()=>{});
   });
 }
-function stopPresence() { clearInterval(S.presenceTimer); }
+
+function stopPresence() {
+  clearInterval(S.presenceTimer);
+}
+
 function isOnline(profile) {
   if (!profile || !profile.lastSeen) return false;
   const t = profile.lastSeen.toDate ? profile.lastSeen.toDate() : new Date(profile.lastSeen);
@@ -378,7 +463,7 @@ function isOnline(profile) {
 }
 
 // ============================================================
-// CHATS LISTENER
+// LISTENERS
 // ============================================================
 function startAllListeners() {
   startPresence();
@@ -400,13 +485,9 @@ function listenChats() {
     collection(db, 'chats'),
     where('members', 'array-contains', S.user.uid)
   );
-  S.unsubChats = onSnapshot(q, async (snap) => {
+  S.unsubChats = onSnapshot(q, (snap) => {
     const chats = [];
-    for (const d of snap.docs) {
-      const data = d.data();
-      chats.push({ id: d.id, ...data });
-    }
-    // sort by updatedAt
+    snap.forEach(d => chats.push({ id: d.id, ...d.data() }));
     chats.sort((a, b) => {
       const ta = a.updatedAt?.toDate?.()?.getTime() || 0;
       const tb = b.updatedAt?.toDate?.()?.getTime() || 0;
@@ -414,7 +495,7 @@ function listenChats() {
     });
     S.chats = chats;
     if (S.currentView === 'chats') renderChats();
-  }, (e) => console.warn('chats listener', e));
+  }, (e) => console.warn('chats listener error:', e));
 }
 
 // ============================================================
@@ -443,7 +524,7 @@ function renderChats() {
     const other = chat.type === 'direct' ? chat.members.find(u => u !== S.user.uid) : null;
     const otherProfile = other ? (S.userCache[other] || {}) : null;
     const avatarSrc = chat.type === 'group'
-      ? (chat.photoURL || `https://ui-avatars.com/api/?background=7b2ff7&color=fff&bold=true&name=${encodeURIComponent(chat.name||'G')}`)
+      ? (chat.photoURL || `https://ui-avatars.com/api/?background=7b2ff7&color=fff&bold=true&name=${encodeURIComponent(chat.name || 'Group')}`)
       : avatarUrl(otherProfile);
     const online = chat.type === 'direct' && otherProfile && isOnline(otherProfile);
     const unread = (chat.unread && chat.unread[S.user.uid]) || 0;
@@ -456,7 +537,7 @@ function renderChats() {
       </div>
       <div class="list-body">
         <div class="list-name">${escapeHtml(chatTitle(chat))}</div>
-        <div class="list-sub">${last ? escapeHtml(last.senderName ? last.senderName.split(' ')[0] + ': ' + (last.text || '📎') : (last.text || '📎')) : 'No messages yet'}</div>
+        <div class="list-sub">${last ? escapeHtml((last.senderName ? last.senderName.split(' ')[0] + ': ' : '') + (last.text || '📎')) : 'No messages yet'}</div>
       </div>
       <div class="list-meta">
         <span>${last ? timeAgo(last.createdAt) : ''}</span>
@@ -475,17 +556,27 @@ function chatTitle(chat) {
   return p?.displayName || p?.username || 'User';
 }
 
-// New chat button -> go to friends or create group
 $('#new-chat-btn').onclick = () => {
   showModal('New Chat', `
     <button class="btn-secondary" id="new-direct" style="width:100%;margin-bottom:8px">👤 Direct Message</button>
     <button class="btn-secondary" id="new-group" style="width:100%">👥 New Group</button>
   `, null);
   $('#modal-ok').classList.add('hidden');
-  $('#modal-cancel').onclick = () => { $('#modal').classList.add('hidden'); $('#modal-ok').classList.remove('hidden'); };
+  $('#modal-cancel').onclick = () => {
+    $('#modal').classList.add('hidden');
+    $('#modal-ok').classList.remove('hidden');
+  };
   setTimeout(() => {
-    $('#new-direct').onclick = () => { $('#modal').classList.add('hidden'); $('#modal-ok').classList.remove('hidden'); router.go('friends'); };
-    $('#new-group').onclick = () => { $('#modal').classList.add('hidden'); $('#modal-ok').classList.remove('hidden'); createGroupFlow(); };
+    $('#new-direct').onclick = () => {
+      $('#modal').classList.add('hidden');
+      $('#modal-ok').classList.remove('hidden');
+      router.go('friends');
+    };
+    $('#new-group').onclick = () => {
+      $('#modal').classList.add('hidden');
+      $('#modal-ok').classList.remove('hidden');
+      createGroupFlow();
+    };
   }, 30);
 };
 
@@ -544,10 +635,11 @@ async function renderFriends() {
     friendList.innerHTML = '<div class="empty-state">No friends yet — use Search to find people</div>';
     return;
   }
-  const profiles = await Promise.all(friends.map(uid => getUser(uid)));
+  const profiles = (await Promise.all(friends.map(uid => getUser(uid)))).filter(Boolean);
   friendList.innerHTML = '';
-  profiles.filter(Boolean).forEach(p => {
-    if (q && !(p.displayName || '').toLowerCase().includes(q) && !(p.username || '').toLowerCase().includes(q)) return;
+  profiles.forEach(p => {
+    if (q && !(p.displayName || '').toLowerCase().includes(q) &&
+        !(p.username || '').toLowerCase().includes(q)) return;
     const el = document.createElement('div');
     el.className = 'list-item';
     el.innerHTML = `
@@ -564,6 +656,16 @@ async function renderFriends() {
       </div>
     `;
     el.onclick = () => startDirectChat(p.uid);
+    // Right-click / long-press for unfriend/block
+    el.oncontextmenu = (e) => {
+      e.preventDefault();
+      showCtxMenu(e.clientX, e.clientY, [
+        { icon:'💬', label:'Message', action: () => startDirectChat(p.uid) },
+        { icon:'🚫', label:'Block User', danger:true, action: () => blockUser(p.uid) },
+        { divider:true },
+        { icon:'❌', label:'Unfriend', danger:true, action: () => unfriend(p.uid) }
+      ]);
+    };
     friendList.appendChild(el);
   });
 }
@@ -575,11 +677,14 @@ $('#friends-search').oninput = debounce(() => renderFriends(), 200);
 async function sendFriendRequest(uid) {
   if (uid === S.user.uid) return toast('Cannot add yourself', 'error');
   if ((S.profile.friends || []).includes(uid)) return toast('Already friends');
-  // Check existing
+
   const q1 = query(collection(db, 'friendRequests'),
-    where('from', '==', S.user.uid), where('to', '==', uid), where('status','==','pending'));
+    where('from', '==', S.user.uid),
+    where('to', '==', uid),
+    where('status', '==', 'pending'));
   const ex = await getDocs(q1);
   if (!ex.empty) return toast('Request already sent');
+
   await addDoc(collection(db, 'friendRequests'), {
     from: S.user.uid,
     to: uid,
@@ -588,7 +693,7 @@ async function sendFriendRequest(uid) {
     status: 'pending',
     createdAt: serverTimestamp()
   });
-  toast('Friend request sent', 'success');
+  toast('Friend request sent ✅', 'success');
 }
 
 async function acceptRequest(req) {
@@ -597,8 +702,16 @@ async function acceptRequest(req) {
   batch.update(doc(db, 'users', req.from), { friends: arrayUnion(S.user.uid) });
   batch.update(doc(db, 'friendRequests', req.id), { status: 'accepted' });
   await batch.commit();
+
+  // Add notification
+  await addDoc(collection(db, 'users', req.from, 'notifications'), {
+    icon: '👥', title: 'Friend Request Accepted',
+    text: S.profile.displayName + ' accepted your request',
+    read: false, createdAt: serverTimestamp()
+  });
+
   await loadUserProfile();
-  toast('Friend added', 'success');
+  toast('Friend added ✅', 'success');
   renderFriends();
 }
 
@@ -622,17 +735,19 @@ async function unfriend(uid) {
 
 async function blockUser(uid) {
   const p = await getUser(uid);
-  confirmDialog('Block User', `Block ${p?.displayName || 'user'}? They won't be able to message you.`, async () => {
-    await updateDoc(doc(db, 'users', S.user.uid), { blocked: arrayUnion(uid) });
-    await loadUserProfile();
-    toast('User blocked', 'error');
-  }, 'Block');
+  confirmDialog('Block User',
+    `Block ${p?.displayName || 'user'}? They won't be able to message you.`,
+    async () => {
+      await updateDoc(doc(db, 'users', S.user.uid), { blocked: arrayUnion(uid) });
+      await loadUserProfile();
+      toast('User blocked', 'error');
+    }, 'Block');
 }
 
 async function unblockUser(uid) {
   await updateDoc(doc(db, 'users', S.user.uid), { blocked: arrayRemove(uid) });
   await loadUserProfile();
-  toast('User unblocked', 'success');
+  toast('User unblocked ✅', 'success');
 }
 
 // ============================================================
@@ -641,6 +756,7 @@ async function unblockUser(uid) {
 async function renderSearch() {
   const q = ($('#user-search').value || '').trim().toLowerCase();
   const res = $('#search-results');
+
   if (!q) {
     res.innerHTML = '<div class="empty-state">Search for users by name or @username</div>';
     return;
@@ -652,24 +768,24 @@ async function renderSearch() {
 
   res.innerHTML = '<div class="empty-state">Searching...</div>';
 
-  // Search by username (prefix) and displayName (prefix)
-  const usersRef = collection(db, 'users');
-  const q1 = query(usersRef, orderBy('username'), startAt(q), endAt(q + '\uf8ff'), limit(15));
-  const q2 = query(usersRef, orderBy('displayName'), startAt(q.charAt(0).toUpperCase() + q.slice(1)), endAt(q.charAt(0).toUpperCase() + q.slice(1) + '\uf8ff'), limit(15));
-
   try {
+    const usersRef = collection(db, 'users');
+    const q1 = query(usersRef, orderBy('username'), startAt(q), endAt(q + '\uf8ff'), limit(15));
+    const q2 = query(usersRef, orderBy('displayName'), startAt(q), endAt(q + '\uf8ff'), limit(15));
     const [s1, s2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+
     const map = new Map();
     [...s1.docs, ...s2.docs].forEach(d => {
       if (d.id !== S.user.uid) map.set(d.id, { id: d.id, ...d.data() });
     });
     const results = [...map.values()];
+
     if (results.length === 0) {
       res.innerHTML = '<div class="empty-state">No users found</div>';
       return;
     }
     res.innerHTML = '';
-    for (const p of results) {
+    results.forEach(p => {
       S.userCache[p.id] = p;
       const isFriend = (S.profile.friends || []).includes(p.id);
       const el = document.createElement('div');
@@ -693,7 +809,7 @@ async function renderSearch() {
         btn.onclick = (e) => { e.stopPropagation(); sendFriendRequest(p.id); };
       }
       res.appendChild(el);
-    }
+    });
   } catch (err) {
     console.error(err);
     res.innerHTML = '<div class="empty-state">Search error — try again</div>';
@@ -713,6 +829,7 @@ function renderProfile() {
   $('#profile-stats').innerHTML = `
     <div class="stat-item"><div class="stat-value">${(S.profile.friends||[]).length}</div><div class="stat-label">Friends</div></div>
     <div class="stat-item"><div class="stat-value">${S.chats.length}</div><div class="stat-label">Chats</div></div>
+    <div class="stat-item"><div class="stat-value">${(S.profile.blocked||[]).length}</div><div class="stat-label">Blocked</div></div>
   `;
 }
 
@@ -726,40 +843,53 @@ $('#edit-profile-btn').onclick = () => {
     if (!name) return false;
     await updateDoc(doc(db, 'users', S.user.uid), { displayName: name, bio });
     await fbUpdateProfile(S.user, { displayName: name });
-    S.profile.displayName = name; S.profile.bio = bio;
+    S.profile.displayName = name;
+    S.profile.bio = bio;
     renderProfile();
-    toast('Profile updated', 'success');
+    toast('Profile updated ✅', 'success');
   }, 'Save');
 };
 
+// Avatar upload — base64, no Storage
 $('#avatar-upload').onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  if (file.size > 3 * 1024 * 1024) return toast('Max 3MB', 'error');
+  e.target.value = '';
+
+  if (!file.type.startsWith('image/')) {
+    return toast('Only images allowed', 'error');
+  }
+  if (file.size > IMAGE_MAX) {
+    return toast('Image too large (max 1MB)', 'error');
+  }
+
   try {
-    toast('Uploading...');
-    const path = `users/${S.user.uid}/avatar_${Date.now()}`;
-    const ref = storageRef(storage, path);
-    await uploadBytes(ref, file);
-    const url = await getDownloadURL(ref);
-    await updateDoc(doc(db, 'users', S.user.uid), { photoURL: url });
-    await fbUpdateProfile(S.user, { photoURL: url });
-    S.profile.photoURL = url;
+    toast('Compressing...');
+    const dataUrl = await compressImage(file, 300, 0.75);
+    if (dataUrl.length > 900 * 1024) {
+      return toast('Image too large after compression', 'error');
+    }
+    await updateDoc(doc(db, 'users', S.user.uid), { photoURL: dataUrl });
+    await fbUpdateProfile(S.user, { photoURL: dataUrl });
+    S.profile.photoURL = dataUrl;
     renderProfile();
     updateTopbarAvatar();
-    toast('Photo updated', 'success');
-  } catch (err) { console.error(err); toast('Upload failed', 'error'); }
+    toast('Photo updated ✅', 'success');
+  } catch (err) {
+    console.error(err);
+    toast('Upload failed', 'error');
+  }
 };
 
 $('#blocked-btn').onclick = async () => {
   const blocked = S.profile.blocked || [];
   if (blocked.length === 0) return toast('No blocked users');
-  const profiles = await Promise.all(blocked.map(getUser));
+  const profiles = (await Promise.all(blocked.map(getUser))).filter(Boolean);
   showModal('Blocked Users', profiles.map(p => `
     <div class="list-item" style="padding:8px">
       <div class="list-avatar" style="width:36px;height:36px"><img src="${avatarUrl(p)}"></div>
-      <div class="list-body"><div class="list-name">${escapeHtml(p?.displayName || '?')}</div></div>
-      <button class="mini-btn" data-uid="${p?.uid}">Unblock</button>
+      <div class="list-body"><div class="list-name">${escapeHtml(p.displayName)}</div></div>
+      <button class="mini-btn" data-uid="${p.uid}">Unblock</button>
     </div>
   `).join(''), null);
   $('#modal-ok').classList.add('hidden');
@@ -787,36 +917,40 @@ $('#settings-btn').onclick = () => {
       'settings.showLastSeen': $('#set-lastseen').checked,
       'settings.notifications': $('#set-notif').checked
     });
-    toast('Settings saved', 'success');
+    toast('Settings saved ✅', 'success');
   }, 'Save');
 };
 
 $('#logout-btn').onclick = () => {
   confirmDialog('Logout', 'Are you sure you want to logout?', async () => {
-    if (S.user) await updateDoc(doc(db, 'users', S.user.uid), { online: false, lastSeen: serverTimestamp() }).catch(()=>{});
+    if (S.user) {
+      await updateDoc(doc(db, 'users', S.user.uid), {
+        online: false, lastSeen: serverTimestamp()
+      }).catch(()=>{});
+    }
     await signOut(auth);
   }, 'Logout');
 };
 
 $('#delete-account-btn').onclick = () => {
-  confirmDialog('Delete Account', 'This will permanently delete your account. Continue?', async () => {
-    try {
-      // Delete user doc + username
-      await deleteDoc(doc(db, 'usernames', S.profile.username)).catch(()=>{});
-      await deleteDoc(doc(db, 'users', S.user.uid));
-      await deleteUser(S.user);
-      toast('Account deleted', 'success');
-    } catch (err) {
-      toast('Please re-login and try again', 'error');
-    }
-  }, 'Delete');
+  confirmDialog('Delete Account',
+    'This will permanently delete your account. Continue?',
+    async () => {
+      try {
+        await deleteDoc(doc(db, 'usernames', S.profile.username)).catch(()=>{});
+        await deleteDoc(doc(db, 'users', S.user.uid));
+        await deleteUser(S.user);
+        toast('Account deleted ✅', 'success');
+      } catch (err) {
+        toast('Please re-login and try again', 'error');
+      }
+    }, 'Delete');
 };
 
 // ============================================================
 // START DIRECT CHAT
 // ============================================================
 async function startDirectChat(uid) {
-  // Check if a direct chat exists
   const q = query(collection(db, 'chats'),
     where('type', '==', 'direct'),
     where('members', 'array-contains', S.user.uid));
@@ -827,7 +961,6 @@ async function startDirectChat(uid) {
   });
   if (existing) return openChat(existing.id, existing.data());
 
-  const other = await getUser(uid);
   const ref = await addDoc(collection(db, 'chats'), {
     type: 'direct',
     members: [S.user.uid, uid],
@@ -843,18 +976,19 @@ async function startDirectChat(uid) {
 }
 
 // ============================================================
-// GROUP CHAT CREATE
+// GROUP CHAT
 // ============================================================
 async function createGroupFlow() {
   const friends = S.profile.friends || [];
   if (friends.length === 0) return toast('Add friends first', 'error');
-  const profiles = await Promise.all(friends.map(getUser));
-  showModal('New Group (max 5)', `
+  const profiles = (await Promise.all(friends.map(getUser))).filter(Boolean);
+
+  showModal('New Group (max 5 members)', `
     <input type="text" id="grp-name" placeholder="Group name">
     <div style="max-height:280px;overflow-y:auto;margin-bottom:10px">
       ${profiles.map(p => `
         <label class="list-item" style="cursor:pointer">
-          <input type="checkbox" value="${p.uid}" style="width:auto;margin:0">
+          <input type="checkbox" value="${p.uid}" style="width:auto;margin-right:8px">
           <div class="list-avatar" style="width:36px;height:36px"><img src="${avatarUrl(p)}"></div>
           <div class="list-body"><div class="list-name">${escapeHtml(p.displayName)}</div></div>
         </label>
@@ -866,6 +1000,7 @@ async function createGroupFlow() {
     const checked = $$('#modal-body input[type=checkbox]:checked').map(c => c.value);
     if (checked.length === 0) { toast('Select at least 1 friend', 'error'); return false; }
     if (checked.length > 4) { toast('Max 4 friends (5 with you)', 'error'); return false; }
+
     const members = [S.user.uid, ...checked];
     const ref = await addDoc(collection(db, 'chats'), {
       type: 'group',
@@ -878,7 +1013,7 @@ async function createGroupFlow() {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
-    toast('Group created', 'success');
+    toast('Group created ✅', 'success');
     openChat(ref.id, { id: ref.id, type: 'group', members, name });
   }, 'Create');
 }
@@ -889,16 +1024,25 @@ async function createGroupFlow() {
 async function openChat(chatId, chatData) {
   closeActiveChat();
   S.activeChat = chatId;
+
   const fresh = await getDoc(doc(db, 'chats', chatId));
   S.activeChatData = fresh.exists() ? { id: chatId, ...fresh.data() } : chatData;
 
   const title = chatTitle(S.activeChatData);
-  router.go('chat', { chatId, title });
+  S.currentView = 'chat';
+  S.currentViewOpts = { chatId, title };
+
+  // Render chat view directly
+  $$('.view').forEach(v => v.classList.add('hidden'));
+  $('#view-chat').classList.remove('hidden');
+  $('#back-btn').classList.remove('hidden');
+  $('#topbar-title').textContent = title;
+  $('#bottom-nav').classList.add('hidden');
+  history.pushState({ view: 'chat', opts: { chatId, title } }, '', '#chat');
 
   // Clear unread
-  await updateDoc(doc(db, 'chats', chatId), { [`unread.${S.user.uid}`]: 0 }).catch(()=>{});
+  updateDoc(doc(db, 'chats', chatId), { [`unread.${S.user.uid}`]: 0 }).catch(()=>{});
 
-  // Load messages
   subscribeMessages(chatId);
   subscribeTyping(chatId);
 }
@@ -913,7 +1057,6 @@ function closeActiveChat() {
 }
 
 function renderChatView() {
-  // render existing messages on view switch
   $('#chat-messages').innerHTML = '';
   if (S.activeChat) subscribeMessages(S.activeChat);
 }
@@ -932,21 +1075,22 @@ function subscribeMessages(chatId) {
     const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderMessages(msgs);
     scrollChatToBottom();
-    // Mark read
     markMessagesRead(chatId, msgs);
   });
 }
 
 async function markMessagesRead(chatId, msgs) {
+  const toUpdate = msgs.filter(m =>
+    m.sender !== S.user.uid && !(m.readBy || []).includes(S.user.uid)
+  );
+  if (toUpdate.length === 0) return;
   const batch = writeBatch(db);
-  let dirty = false;
-  msgs.forEach(m => {
-    if (m.sender !== S.user.uid && !(m.readBy || []).includes(S.user.uid)) {
-      batch.update(doc(db, 'chats', chatId, 'messages', m.id), { readBy: arrayUnion(S.user.uid) });
-      dirty = true;
-    }
+  toUpdate.forEach(m => {
+    batch.update(doc(db, 'chats', chatId, 'messages', m.id), {
+      readBy: arrayUnion(S.user.uid)
+    });
   });
-  if (dirty) await batch.commit().catch(()=>{});
+  await batch.commit().catch(()=>{});
 }
 
 function renderMessages(msgs) {
@@ -955,7 +1099,7 @@ function renderMessages(msgs) {
   const isGroup = S.activeChatData?.type === 'group';
   let lastSender = null;
 
-  msgs.forEach((m, i) => {
+  msgs.forEach((m) => {
     const out = m.sender === S.user.uid;
     const isNewSender = m.sender !== lastSender;
     lastSender = m.sender;
@@ -974,36 +1118,35 @@ function renderMessages(msgs) {
     bubble.className = 'bubble';
 
     let inner = '';
-    // Sender name (group, incoming)
+
     if (isGroup && !out && isNewSender) {
       inner += `<div class="msg-sender">${escapeHtml(m.senderName || 'User')}</div>`;
     }
-    // Reply preview
+
     if (m.replyTo) {
       inner += `<div class="msg-reply-preview"><b>${escapeHtml(m.replyTo.senderName || 'User')}</b>${escapeHtml((m.replyTo.text || '').slice(0, 100))}</div>`;
     }
-    // Content
+
     if (m.type === 'image' && m.fileURL) {
-      inner += `<img class="msg-image" src="${m.fileURL}" onclick="window.open('${m.fileURL}','_blank')">`;
+      inner += `<img class="msg-image" src="${m.fileURL}" onclick="window.open('${m.fileURL}','_blank')" alt="photo">`;
     } else if (m.type === 'file' && m.fileURL) {
-      inner += `<a class="msg-file" href="${m.fileURL}" target="_blank" rel="noopener">
+      inner += `<a class="msg-file" href="${m.fileURL}" download="${escapeHtml(m.fileName || 'file')}">
         <div class="msg-file-icon">📎</div>
         <div>
           <div class="msg-file-name">${escapeHtml(m.fileName || 'file')}</div>
-          <div class="msg-file-size">${(m.fileSize / 1024).toFixed(1)} KB</div>
+          <div class="msg-file-size">${formatBytes(m.fileSize || 0)}</div>
         </div>
       </a>`;
     } else {
       inner += `<div>${escapeHtml(m.text || '')}</div>`;
     }
-    // Meta
+
     inner += `<div class="msg-meta">
       ${m.editedAt ? '<span class="edited">edited</span>' : ''}
       <span>${formatTime(m.createdAt)}</span>
       ${out ? `<span>${(m.readBy || []).length > 1 ? '✓✓' : '✓'}</span>` : ''}
     </div>`;
 
-    // Reactions
     if (m.reactions && Object.keys(m.reactions).length) {
       let rx = '<div class="reactions">';
       for (const [emoji, users] of Object.entries(m.reactions)) {
@@ -1019,9 +1162,10 @@ function renderMessages(msgs) {
     row.appendChild(bubble);
     container.appendChild(row);
 
-    // Interactions
+    // Context menu (right-click on desktop)
     row.oncontextmenu = (e) => { e.preventDefault(); showMessageMenu(e.clientX, e.clientY, m, row); };
-    // long press mobile
+
+    // Long-press on mobile
     let touchTimer;
     row.addEventListener('touchstart', (e) => {
       touchTimer = setTimeout(() => {
@@ -1032,7 +1176,6 @@ function renderMessages(msgs) {
     row.addEventListener('touchend', () => clearTimeout(touchTimer));
     row.addEventListener('touchmove', () => clearTimeout(touchTimer));
 
-    // Click reaction chips to toggle
     row.querySelectorAll('.reaction-chip').forEach(chip => {
       chip.onclick = (e) => { e.stopPropagation(); toggleReaction(S.activeChat, m, chip.dataset.emoji); };
     });
@@ -1048,6 +1191,7 @@ function showMessageMenu(x, y, m, row) {
   const isMine = m.sender === S.user.uid;
   const menu = $('#context-menu');
   const reactions = ['❤️','😂','👍','😮','😢','🙏'];
+
   menu.innerHTML = `
     <div class="reaction-picker" style="position:static;margin-bottom:6px;justify-content:center">
       ${reactions.map(r => `<button data-r="${r}">${r}</button>`).join('')}
@@ -1055,13 +1199,15 @@ function showMessageMenu(x, y, m, row) {
     <div class="ctx-item" data-a="reply">↩️ Reply</div>
     ${isMine ? `<div class="ctx-item" data-a="edit">✏️ Edit</div>` : ''}
     <div class="ctx-item" data-a="forward">↪️ Forward</div>
-    <div class="ctx-item" data-a="star">⭐ Star</div>
+    <div class="ctx-item" data-a="star">⭐ ${(m.starredBy || []).includes(S.user.uid) ? 'Unstar' : 'Star'}</div>
     ${isMine ? `<div class="ctx-divider"></div><div class="ctx-item danger" data-a="delete">🗑️ Delete</div>` : ''}
     ${!isMine ? `<div class="ctx-divider"></div><div class="ctx-item danger" data-a="report">🚩 Report</div>` : ''}
   `;
   menu.style.left = Math.min(x, window.innerWidth - 220) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - 320) + 'px';
   menu.classList.remove('hidden');
+
+  const hideCtx = () => menu.classList.add('hidden');
 
   menu.querySelectorAll('[data-r]').forEach(b => b.onclick = (e) => {
     e.stopPropagation();
@@ -1080,10 +1226,12 @@ function showMessageMenu(x, y, m, row) {
     hideCtx();
   });
 
-  const hideCtx = () => menu.classList.add('hidden');
   setTimeout(() => {
     document.addEventListener('click', function c(e) {
-      if (!menu.contains(e.target)) { hideCtx(); document.removeEventListener('click', c); }
+      if (!menu.contains(e.target)) {
+        hideCtx();
+        document.removeEventListener('click', c);
+      }
     });
   }, 10);
 }
@@ -1092,11 +1240,17 @@ async function toggleReaction(chatId, msg, emoji) {
   const ref = doc(db, 'chats', chatId, 'messages', msg.id);
   const key = `reactions.${emoji}`;
   const has = (msg.reactions?.[emoji] || []).includes(S.user.uid);
-  await updateDoc(ref, { [key]: has ? arrayRemove(S.user.uid) : arrayUnion(S.user.uid) });
+  await updateDoc(ref, {
+    [key]: has ? arrayRemove(S.user.uid) : arrayUnion(S.user.uid)
+  });
 }
 
 function setReply(m) {
-  S.replyTo = { msgId: m.id, text: m.text || (m.type === 'image' ? '📷 Photo' : '📎 File'), senderName: m.senderName };
+  S.replyTo = {
+    msgId: m.id,
+    text: m.text || (m.type === 'image' ? '📷 Photo' : '📎 File'),
+    senderName: m.senderName
+  };
   $('#reply-preview').classList.remove('hidden');
   $('#reply-preview').innerHTML = `
     <div class="reply-preview-body">
@@ -1105,22 +1259,31 @@ function setReply(m) {
     </div>
     <div class="reply-close" id="reply-close">✕</div>
   `;
-  $('#reply-close').onclick = () => { S.replyTo = null; $('#reply-preview').classList.add('hidden'); };
+  $('#reply-close').onclick = () => {
+    S.replyTo = null;
+    $('#reply-preview').classList.add('hidden');
+  };
   $('#message-input').focus();
 }
 
 async function editMessage(m) {
-  showModal('Edit Message', `<input type="text" id="edit-msg" value="${escapeHtml(m.text)}">`, async () => {
-    const t = $('#edit-msg').value.trim();
-    if (!t) return false;
-    await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), { text: t, editedAt: serverTimestamp() });
-    toast('Edited', 'success');
-  }, 'Save');
+  showModal('Edit Message',
+    `<input type="text" id="edit-msg" value="${escapeHtml(m.text)}">`,
+    async () => {
+      const t = $('#edit-msg').value.trim();
+      if (!t) return false;
+      await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), {
+        text: t, editedAt: serverTimestamp()
+      });
+      toast('Edited ✅', 'success');
+    }, 'Save');
 }
 
 async function deleteMessage(m) {
   confirmDialog('Delete', 'Delete this message?', async () => {
-    await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), { deleted: true, text: '', fileURL: '', type: 'text' });
+    await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), {
+      deleted: true, text: '', fileURL: '', type: 'text'
+    });
     toast('Deleted');
   }, 'Delete');
 }
@@ -1128,7 +1291,7 @@ async function deleteMessage(m) {
 async function forwardMessage(m) {
   if (S.chats.length === 0) return toast('No chats to forward to');
   showModal('Forward to', S.chats.map(c => `
-    <div class="list-item" data-fwd="${c.id}">
+    <div class="list-item" data-fwd="${c.id}" style="cursor:pointer">
       <div class="list-body"><div class="list-name">${escapeHtml(chatTitle(c))}</div></div>
     </div>
   `).join(''), null);
@@ -1153,7 +1316,7 @@ async function forwardMessage(m) {
       });
       await updateDoc(doc(db, 'chats', cid), {
         lastMessage: {
-          text: m.text || '📎',
+          text: m.text || (m.type === 'image' ? '📷 Photo' : '📎 ' + (m.fileName || 'File')),
           senderName: S.profile.displayName,
           senderId: S.user.uid,
           createdAt: serverTimestamp(),
@@ -1161,7 +1324,7 @@ async function forwardMessage(m) {
         },
         updatedAt: serverTimestamp()
       });
-      toast('Forwarded', 'success');
+      toast('Forwarded ✅', 'success');
       $('#modal').classList.add('hidden');
       $('#modal-ok').classList.remove('hidden');
     });
@@ -1171,8 +1334,10 @@ async function forwardMessage(m) {
 async function starMessage(m) {
   const ref = doc(db, 'chats', S.activeChat, 'messages', m.id);
   const has = (m.starredBy || []).includes(S.user.uid);
-  await updateDoc(ref, { starredBy: has ? arrayRemove(S.user.uid) : arrayUnion(S.user.uid) });
-  toast(has ? 'Unstarred' : 'Starred', 'success');
+  await updateDoc(ref, {
+    starredBy: has ? arrayRemove(S.user.uid) : arrayUnion(S.user.uid)
+  });
+  toast(has ? 'Unstarred' : 'Starred ✅', 'success');
 }
 
 async function reportMessage(m) {
@@ -1192,7 +1357,7 @@ async function reportMessage(m) {
       reason: $('#report-reason').value,
       createdAt: serverTimestamp()
     });
-    toast('Report submitted', 'success');
+    toast('Report submitted ✅', 'success');
   }, 'Report');
 }
 
@@ -1205,6 +1370,15 @@ async function sendMessage() {
   if (!text || !S.activeChat) return;
   input.value = '';
   await stopTyping();
+
+  // Check if other user blocked me
+  const otherUids = (S.activeChatData?.members || []).filter(u => u !== S.user.uid);
+  for (const uid of otherUids) {
+    const p = S.userCache[uid] || await getUser(uid);
+    if (p && (p.blocked || []).includes(S.user.uid)) {
+      return toast('Cannot send — you are blocked', 'error');
+    }
+  }
 
   const msg = {
     sender: S.user.uid,
@@ -1224,13 +1398,35 @@ async function sendMessage() {
   }
 
   await addDoc(collection(db, 'chats', S.activeChat, 'messages'), msg);
+
+  // Increment unread for others
+  const unreadUpdates = {};
+  otherUids.forEach(uid => { unreadUpdates[`unread.${uid}`] = 1; });
+
   await updateDoc(doc(db, 'chats', S.activeChat), {
     lastMessage: {
-      text, senderName: S.profile.displayName, senderId: S.user.uid,
-      createdAt: serverTimestamp(), type: 'text'
+      text,
+      senderName: S.profile.displayName,
+      senderId: S.user.uid,
+      createdAt: serverTimestamp(),
+      type: 'text'
     },
     updatedAt: serverTimestamp()
   });
+
+  // Notify others
+  for (const uid of otherUids) {
+    await addDoc(collection(db, 'users', uid, 'notifications'), {
+      icon: '💬',
+      title: S.activeChatData.type === 'group'
+        ? S.activeChatData.name
+        : S.profile.displayName,
+      text: text.slice(0, 60),
+      chatId: S.activeChat,
+      read: false,
+      createdAt: serverTimestamp()
+    });
+  }
 }
 
 $('#send-btn').onclick = sendMessage;
@@ -1255,8 +1451,13 @@ $('#message-input').addEventListener('input', async () => {
 async function setTyping(val) {
   if (!S.activeChat) return;
   const ref = doc(db, 'users', S.user.uid, 'typing', S.activeChat);
-  await setDoc(ref, { typing: val, at: serverTimestamp(), name: S.profile.displayName }).catch(()=>{});
+  await setDoc(ref, {
+    typing: val,
+    at: serverTimestamp(),
+    name: S.profile.displayName
+  }).catch(()=>{});
 }
+
 async function stopTyping() {
   if (!typingActive) return;
   typingActive = false;
@@ -1270,37 +1471,67 @@ function subscribeTyping(chatId) {
   if (others.length === 0) return;
 
   const typingMap = {};
-  const unsubs = others.map(uid => onSnapshot(doc(db, 'users', uid, 'typing', chatId), (d) => {
-    if (d.exists() && d.data().typing) {
-      const t = d.data().at?.toDate?.()?.getTime() || 0;
-      if (Date.now() - t < 8000) typingMap[uid] = d.data().name || 'Someone';
-      else delete typingMap[uid];
-    } else delete typingMap[uid];
-    const names = Object.values(typingMap);
-    const el = $('#typing-indicator');
-    if (names.length === 0) el.classList.add('hidden');
-    else { el.classList.remove('hidden'); el.textContent = names.join(', ') + ' typing...'; }
-  }));
+  const unsubs = others.map(uid => onSnapshot(
+    doc(db, 'users', uid, 'typing', chatId),
+    (d) => {
+      if (d.exists() && d.data().typing) {
+        const t = d.data().at?.toDate?.()?.getTime() || 0;
+        if (Date.now() - t < 8000) typingMap[uid] = d.data().name || 'Someone';
+        else delete typingMap[uid];
+      } else {
+        delete typingMap[uid];
+      }
+      const names = Object.values(typingMap);
+      const el = $('#typing-indicator');
+      if (names.length === 0) el.classList.add('hidden');
+      else {
+        el.classList.remove('hidden');
+        el.textContent = names.join(', ') + ' typing...';
+      }
+    }
+  ));
   S.unsubTyping = () => unsubs.forEach(u => u());
 }
 
 // ============================================================
-// FILE UPLOAD
+// FILE UPLOAD (Base64, no Storage)
 // ============================================================
 $('#attach-btn').onclick = () => $('#file-input').click();
+
 $('#file-input').onchange = async (e) => {
   const file = e.target.files[0];
   if (!file || !S.activeChat) return;
   e.target.value = '';
-  if (file.size > 3 * 1024 * 1024) return toast('Max 3MB', 'error');
 
   const isImg = file.type.startsWith('image/');
+  let dataUrl = '';
+  let finalSize = file.size;
+  let finalName = file.name;
+  let finalMime = file.type;
+
   try {
-    toast('Uploading...');
-    const path = `chats/${S.activeChat}/${Date.now()}_${file.name}`;
-    const ref = storageRef(storage, path);
-    await uploadBytes(ref, file);
-    const url = await getDownloadURL(ref);
+    if (isImg) {
+      if (file.size > IMAGE_MAX) {
+        return toast('Image too large (max 1MB)', 'error');
+      }
+      toast('Compressing...');
+      dataUrl = await compressImage(file, 800, 0.7);
+      finalMime = 'image/jpeg';
+      finalName = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+      finalSize = Math.round((dataUrl.length - 22) * 0.75);
+      if (dataUrl.length > DOC_MAX) {
+        return toast('Image too large after compression', 'error');
+      }
+    } else {
+      if (file.size > FILE_MAX) {
+        return toast('File too large (max 500KB)', 'error');
+      }
+      toast('Reading file...');
+      dataUrl = await fileToDataURL(file);
+      if (dataUrl.length > DOC_MAX) {
+        return toast('File too large after encoding', 'error');
+      }
+    }
 
     await addDoc(collection(db, 'chats', S.activeChat, 'messages'), {
       sender: S.user.uid,
@@ -1308,18 +1539,19 @@ $('#file-input').onchange = async (e) => {
       senderPhoto: S.profile.photoURL || '',
       text: '',
       type: isImg ? 'image' : 'file',
-      fileURL: url,
-      fileName: file.name,
-      fileSize: file.size,
-      fileMime: file.type,
+      fileURL: dataUrl,
+      fileName: finalName,
+      fileSize: finalSize,
+      fileMime: finalMime,
       reactions: {},
       readBy: [S.user.uid],
       starredBy: [],
       createdAt: serverTimestamp()
     });
+
     await updateDoc(doc(db, 'chats', S.activeChat), {
       lastMessage: {
-        text: isImg ? '📷 Photo' : '📎 ' + file.name,
+        text: isImg ? '📷 Photo' : '📎 ' + finalName,
         senderName: S.profile.displayName,
         senderId: S.user.uid,
         createdAt: serverTimestamp(),
@@ -1327,8 +1559,27 @@ $('#file-input').onchange = async (e) => {
       },
       updatedAt: serverTimestamp()
     });
-    toast('Sent', 'success');
-  } catch (err) { console.error(err); toast('Upload failed', 'error'); }
+
+    // Notify others
+    const otherUids = (S.activeChatData?.members || []).filter(u => u !== S.user.uid);
+    for (const uid of otherUids) {
+      await addDoc(collection(db, 'users', uid, 'notifications'), {
+        icon: isImg ? '📷' : '📎',
+        title: S.activeChatData.type === 'group'
+          ? S.activeChatData.name
+          : S.profile.displayName,
+        text: isImg ? 'Sent a photo' : 'Sent ' + finalName,
+        chatId: S.activeChat,
+        read: false,
+        createdAt: serverTimestamp()
+      });
+    }
+
+    toast('Sent ✅', 'success');
+  } catch (err) {
+    console.error(err);
+    toast('Upload failed — try a smaller file', 'error');
+  }
 };
 
 // ============================================================
@@ -1369,7 +1620,10 @@ function renderNotifs() {
         <div class="notif-time">${timeAgo(n.createdAt)}</div>
       </div>
     `;
-    if (n.chatId) el.onclick = () => { openChat(n.chatId, {}); $('#notif-panel').classList.add('hidden'); };
+    if (n.chatId) el.onclick = () => {
+      openChat(n.chatId, {});
+      $('#notif-panel').classList.add('hidden');
+    };
     list.appendChild(el);
   });
 }
@@ -1379,12 +1633,50 @@ $('#notif-btn').onclick = () => {
   p.classList.toggle('hidden');
   if (!p.classList.contains('hidden')) renderNotifs();
 };
+
 $('#notif-clear').onclick = async () => {
   const batch = writeBatch(db);
   S.notifs.forEach(n => batch.delete(doc(db, 'users', S.user.uid, 'notifications', n.id)));
   await batch.commit();
   toast('Cleared');
 };
+
+// ============================================================
+// CONTEXT MENU (generic)
+// ============================================================
+function showCtxMenu(x, y, items) {
+  const menu = $('#context-menu');
+  menu.innerHTML = '';
+  items.forEach(it => {
+    if (it.divider) {
+      const d = document.createElement('div');
+      d.className = 'ctx-divider';
+      menu.appendChild(d);
+      return;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item' + (it.danger ? ' danger' : '');
+    el.innerHTML = `${it.icon || ''} ${it.label}`;
+    el.onclick = (e) => {
+      e.stopPropagation();
+      menu.classList.add('hidden');
+      it.action();
+    };
+    menu.appendChild(el);
+  });
+  menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 260) + 'px';
+  menu.classList.remove('hidden');
+
+  setTimeout(() => {
+    document.addEventListener('click', function c(e) {
+      if (!menu.contains(e.target)) {
+        menu.classList.add('hidden');
+        document.removeEventListener('click', c);
+      }
+    });
+  }, 10);
+}
 
 // ============================================================
 // NAV / INIT
