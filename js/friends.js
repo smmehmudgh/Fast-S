@@ -1,11 +1,20 @@
 /* ============================================================
    VIEW: FRIENDS — friend-request listener + rendering, and all
    friend-relationship actions (send/accept/reject request,
-   unfriend, block/unblock).
+   unfriend, block/unblock, unsend).
+
+   Updates:
+   1. listenSentRequests() — tracks outgoing pending requests
+      so the Search view can show "Sent" instead of "Add".
+   2. unsendRequest(uid) — cancels an outgoing request.
+   3. acceptRequest() now updates S.requests optimistically so
+      the Accept/Reject buttons disappear immediately.
+   4. Friend list items are clickable → open that user's profile.
    ============================================================ */
 import {
   collection, addDoc, doc, query, where, onSnapshot, getDocs,
-  updateDoc, writeBatch, arrayUnion, arrayRemove, serverTimestamp
+  updateDoc, writeBatch, arrayUnion, arrayRemove, serverTimestamp,
+  deleteDoc
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db } from './firebase.js';
 import { $ } from './dom.js';
@@ -16,8 +25,9 @@ import { isOnline } from './presence.js';
 import { getUser, loadUserProfile } from './profile.js';
 import { showCtxMenu } from './contextmenu.js';
 import { startDirectChat } from './chats.js';
+import { router } from './router.js';
 
-// ===== Firestore listener =====
+// ===== Firestore listeners =====
 export function listenFriendRequests() {
   if (S.unsubRequests) S.unsubRequests();
   const q = query(
@@ -31,13 +41,35 @@ export function listenFriendRequests() {
   });
 }
 
+export function listenSentRequests() {
+  if (S.unsubSentRequests) S.unsubSentRequests();
+  const q = query(
+    collection(db, 'friendRequests'),
+    where('from', '==', S.user.uid),
+    where('status', '==', 'pending')
+  );
+  S.unsubSentRequests = onSnapshot(q, (snap) => {
+    S.sentRequests = snap.docs.map(d => ({ id: d.id, to: d.data().to }));
+    // Refresh Search view if it's open
+    if (S.currentView === 'search') {
+      // Soft refresh — re-run the search with the current query
+      import('./search.js').then(m => m.renderSearch && m.renderSearch());
+    }
+  });
+}
+
+// ===== Helper: is a request already sent to this uid? =====
+export function hasSentRequest(uid) {
+  return S.sentRequests.some(r => r.to === uid);
+}
+
 // ===== Render =====
 export async function renderFriends() {
   const reqList = $('#friend-requests-list');
   const friendList = $('#friends-list');
   const q = ($('#friends-search').value || '').trim().toLowerCase();
 
-  // Requests
+  // ---- Incoming requests ----
   if (S.requests.length === 0) {
     reqList.innerHTML = '<div class="empty-state" style="padding:16px">No pending requests</div>';
   } else {
@@ -63,7 +95,7 @@ export async function renderFriends() {
     }
   }
 
-  // Friends
+  // ---- Friends ----
   const friends = S.profile?.friends || [];
   if (friends.length === 0) {
     friendList.innerHTML = '<div class="empty-state">No friends yet — use Search to find people</div>';
@@ -86,14 +118,16 @@ export async function renderFriends() {
         <div class="list-sub">${isOnline(p) ? 'Online' : 'Last seen ' + timeAgo(p.lastSeen)}</div>
       </div>
       <div class="list-actions">
-        <button class="mini-btn">Message</button>
+        <button class="mini-btn message">Message</button>
       </div>
     `;
-    el.onclick = () => startDirectChat(p.uid);
-    // Right-click / long-press for unfriend/block
+    // Click opens profile
+    el.onclick = () => router.go('user', { uid: p.uid, from: 'friends' });
+    // Right-click / long-press menu
     el.oncontextmenu = (e) => {
       e.preventDefault();
       showCtxMenu(e.clientX, e.clientY, [
+        { icon: '👤', label: 'View Profile', action: () => router.go('user', { uid: p.uid, from: 'friends' }) },
         { icon: '💬', label: 'Message', action: () => startDirectChat(p.uid) },
         { icon: '🚫', label: 'Block User', danger: true, action: () => blockUser(p.uid) },
         { divider: true },
@@ -112,6 +146,7 @@ export async function sendFriendRequest(uid) {
   if (uid === S.user.uid) return toast('Cannot add yourself', 'error');
   if ((S.profile.friends || []).includes(uid)) return toast('Already friends');
 
+  // Already sent?
   const q1 = query(collection(db, 'friendRequests'),
     where('from', '==', S.user.uid),
     where('to', '==', uid),
@@ -130,28 +165,68 @@ export async function sendFriendRequest(uid) {
   toast('Friend request sent ✅', 'success');
 }
 
+export async function unsendRequest(uid) {
+  const req = S.sentRequests.find(r => r.to === uid);
+  if (!req) return toast('No pending request found', 'error');
+  try {
+    await deleteDoc(doc(db, 'friendRequests', req.id));
+    // Optimistic removal
+    S.sentRequests = S.sentRequests.filter(r => r.id !== req.id);
+    toast('Request unsent', 'success');
+    if (S.currentView === 'search') {
+      const m = await import('./search.js');
+      m.renderSearch && m.renderSearch();
+    }
+  } catch (err) {
+    console.error(err);
+    toast('Could not unsend request', 'error');
+  }
+}
+
 async function acceptRequest(req) {
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'users', S.user.uid), { friends: arrayUnion(req.from) });
-  batch.update(doc(db, 'users', req.from), { friends: arrayUnion(S.user.uid) });
-  batch.update(doc(db, 'friendRequests', req.id), { status: 'accepted' });
-  await batch.commit();
-
-  // Add notification
-  await addDoc(collection(db, 'users', req.from, 'notifications'), {
-    icon: '👥', title: 'Friend Request Accepted',
-    text: S.profile.displayName + ' accepted your request',
-    read: false, createdAt: serverTimestamp()
-  });
-
-  await loadUserProfile();
-  toast('Friend added ✅', 'success');
+  // Optimistic update — remove from requests immediately
+  S.requests = S.requests.filter(r => r.id !== req.id);
   renderFriends();
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'users', S.user.uid), { friends: arrayUnion(req.from) });
+    batch.update(doc(db, 'users', req.from), { friends: arrayUnion(S.user.uid) });
+    batch.update(doc(db, 'friendRequests', req.id), { status: 'accepted' });
+    await batch.commit();
+
+    // Notify the sender
+    await addDoc(collection(db, 'users', req.from, 'notifications'), {
+      icon: '👥',
+      title: 'Friend Request Accepted',
+      text: S.profile.displayName + ' accepted your request',
+      read: false,
+      createdAt: serverTimestamp()
+    });
+
+    await loadUserProfile();
+    toast('Friend added ✅', 'success');
+    renderFriends();
+  } catch (err) {
+    console.error(err);
+    toast('Could not accept request', 'error');
+    // Re-load to restore true state
+    if (S.currentView === 'friends') renderFriends();
+  }
 }
 
 async function rejectRequest(req) {
-  await updateDoc(doc(db, 'friendRequests', req.id), { status: 'rejected' });
-  toast('Request rejected');
+  // Optimistic removal
+  S.requests = S.requests.filter(r => r.id !== req.id);
+  renderFriends();
+
+  try {
+    await updateDoc(doc(db, 'friendRequests', req.id), { status: 'rejected' });
+    toast('Request rejected');
+  } catch (err) {
+    console.error(err);
+    toast('Could not reject request', 'error');
+  }
 }
 
 async function unfriend(uid) {
