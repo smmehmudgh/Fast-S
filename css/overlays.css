@@ -1,12 +1,30 @@
-/* ===== MODAL ===== */
+/* ============================================================
+   Overlays: Modal, Notifications Panel, Toast, Context Menu,
+   Reaction Picker.
+
+   Phase 1.3 updates:
+   1. Context menu now has a max-height with internal scroll, so
+      it can never overflow the viewport on small screens.
+   2. Slightly wider min-width on desktop, tighter on mobile.
+   3. Reaction picker wraps gracefully when there's not enough
+      horizontal space (small phones).
+   4. Subtle scrollbar styling inside the menu.
+   5. Better shadow + backdrop for readability over any bubble.
+   ============================================================ */
+
+/* ============================================================
+   MODAL
+   ============================================================ */
 .modal-backdrop {
   position: fixed; inset: 0;
   background: rgba(0,0,0,.65);
   backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
   padding: 20px;
   animation: fadeIn .2s;
+  overflow-y: auto;
 }
 @keyframes fadeIn { from { opacity: 0; } }
 .modal-box {
@@ -17,10 +35,15 @@
   padding: 22px;
   box-shadow: var(--shadow);
   animation: modalIn .25s ease;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  margin: auto;
 }
 @keyframes modalIn { from { transform: scale(.9); opacity: 0; } }
 .modal-box h3 { margin-bottom: 14px; font-size: 17px; }
-.modal-box input, .modal-box select, .modal-box textarea {
+.modal-box input,
+.modal-box select,
+.modal-box textarea {
   width: 100%;
   padding: 11px 14px;
   background: rgba(0,0,0,.25);
@@ -34,7 +57,9 @@
 }
 .modal-actions button { min-width: 84px; }
 
-/* ===== NOTIFICATIONS PANEL ===== */
+/* ============================================================
+   NOTIFICATIONS PANEL
+   ============================================================ */
 .notif-panel {
   position: fixed;
   top: 60px; right: 12px;
@@ -54,8 +79,14 @@
   display: flex; align-items: center; justify-content: space-between;
   border-bottom: 1px solid var(--border);
   font-weight: 700;
+  flex-shrink: 0;
 }
-.notif-list { overflow-y: auto; padding: 8px; max-height: 400px; }
+.notif-list {
+  overflow-y: auto;
+  padding: 8px;
+  max-height: 400px;
+  flex: 1;
+}
 .notif-item {
   padding: 10px 12px;
   border-radius: 10px;
@@ -63,16 +94,24 @@
   display: flex; gap: 10px;
   font-size: 13px;
   transition: background .15s;
+  cursor: pointer;
 }
 .notif-item:hover { background: rgba(120,150,255,.1); }
 .notif-item.unread { background: rgba(0,212,255,.08); }
-.notif-icon { font-size: 18px; }
-.notif-body { flex: 1; }
+.notif-icon { font-size: 18px; flex-shrink: 0; }
+.notif-body { flex: 1; min-width: 0; }
 .notif-title { font-weight: 600; }
-.notif-text { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.notif-text {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 2px;
+  word-break: break-word;
+}
 .notif-time { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
 
-/* ===== TOAST ===== */
+/* ============================================================
+   TOAST
+   ============================================================ */
 .toast-container {
   position: fixed;
   bottom: 80px; left: 50%;
@@ -81,6 +120,8 @@
   display: flex; flex-direction: column; gap: 8px;
   align-items: center;
   pointer-events: none;
+  width: calc(100vw - 32px);
+  max-width: 400px;
 }
 .toast {
   padding: 10px 18px;
@@ -90,25 +131,48 @@
   box-shadow: var(--shadow);
   font-size: 13px;
   animation: toastIn .3s ease;
-  max-width: 90vw;
+  max-width: 100%;
+  text-align: center;
+  word-break: break-word;
 }
 @keyframes toastIn { from { opacity: 0; transform: translateY(20px); } }
 .toast.error { border-color: rgba(255,59,92,.4); color: #ff8098; }
 .toast.success { border-color: rgba(0,230,118,.4); color: var(--green); }
 
-/* ===== CONTEXT MENU ===== */
+/* ============================================================
+   CONTEXT MENU  (main fix for mobile)
+   ============================================================ */
 .context-menu {
   position: fixed;
   min-width: 180px;
+  max-width: min(280px, calc(100vw - 20px));
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 12px 40px rgba(0,0,0,.55);
   padding: 6px;
   z-index: 1500;
   animation: ctxIn .15s;
+  /* Disable text selection so long-press doesn't select */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* Smooth scrolling inside the menu */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 @keyframes ctxIn { from { opacity: 0; transform: scale(.95); } }
+
+.context-menu::-webkit-scrollbar { width: 6px; }
+.context-menu::-webkit-scrollbar-thumb {
+  background: rgba(120,150,255,.3);
+  border-radius: 6px;
+}
+.context-menu::-webkit-scrollbar-track { background: transparent; }
+
 .ctx-item {
   padding: 10px 14px;
   border-radius: 8px;
@@ -116,25 +180,93 @@
   cursor: pointer;
   display: flex; gap: 10px; align-items: center;
   transition: background .12s;
+  white-space: nowrap;
 }
 .ctx-item:hover { background: rgba(120,150,255,.18); }
+.ctx-item:active { background: rgba(120,150,255,.28); }
 .ctx-item.danger { color: #ff8098; }
 .ctx-item.danger:hover { background: rgba(255,59,92,.18); }
-.ctx-divider { height: 1px; background: var(--border); margin: 5px 4px; }
+.ctx-item.danger:active { background: rgba(255,59,92,.28); }
+.ctx-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 4px;
+}
+
+/* ============================================================
+   REACTION PICKER
+   (When used inline inside the context menu — see messages.js
+   `showMessageMenu` which renders it as `position: static`.)
+   ============================================================ */
 .reaction-picker {
   position: fixed;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 24px;
   padding: 6px 10px;
-  display: flex; gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
   z-index: 1501;
   box-shadow: var(--shadow);
+  max-width: calc(100vw - 20px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 .reaction-picker button {
   font-size: 22px;
+  line-height: 1;
   padding: 3px;
   border-radius: 50%;
-  transition: transform .15s;
+  transition: transform .15s, background .15s;
+  flex-shrink: 0;
 }
-.reaction-picker button:hover { transform: scale(1.25); }
+.reaction-picker button:hover {
+  transform: scale(1.25);
+  background: rgba(120,150,255,.18);
+}
+.reaction-picker button:active {
+  transform: scale(1.1);
+}
+
+/* When the picker sits inline inside the context menu
+   (messages.js sets position: static + margin-bottom inline),
+   make sure it flows with the menu. */
+.context-menu .reaction-picker {
+  position: static;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 4px 2px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px !important;
+  border-radius: 0;
+}
+
+/* ============================================================
+   MOBILE TWEAKS
+   ============================================================ */
+@media (max-width: 480px) {
+  .context-menu {
+    min-width: 170px;
+    padding: 5px;
+    border-radius: 10px;
+  }
+  .ctx-item {
+    padding: 11px 13px;
+    font-size: 13px;
+  }
+  .reaction-picker button {
+    font-size: 20px;
+    padding: 2px;
+  }
+  .toast-container {
+    bottom: 72px;
+  }
+  .modal-box {
+    padding: 18px;
+    border-radius: 14px;
+  }
+}
