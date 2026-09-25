@@ -1,0 +1,57 @@
+/* ===== AUTH ===== */
+#auth-screen {
+  align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #0a0e27, #1a1f4a, #2a1a4a);
+  padding: 20px;
+  overflow-y: auto;
+}
+.auth-card {
+  width: 100%; max-width: 400px;
+  background: rgba(20,24,45,.85);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 32px 26px;
+  box-shadow: var(--shadow);
+}
+.auth-logo {
+  font-size: 36px; font-weight: 800; letter-spacing: 3px;
+  text-align: center; margin-bottom: 24px;
+  background: linear-gradient(90deg,#00d4ff,#7b2ff7,#ff2e93);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.auth-tabs {
+  display: flex; gap: 6px; margin-bottom: 20px;
+  background: rgba(0,0,0,.25);
+  padding: 5px; border-radius: 12px;
+}
+.auth-tab {
+  flex: 1; padding: 10px;
+  border-radius: 8px;
+  font-weight: 600; font-size: 14px;
+  color: var(--text-dim);
+  transition: .2s;
+}
+.auth-tab.active {
+  background: var(--bubble-out);
+  color: #fff;
+}
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0; color: var(--text-dim); font-size: 12px;
+}
+.divider::before, .divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
+.auth-links { text-align: right; margin-top: 4px; }
+.auth-links a { color: var(--accent); font-size: 13px; text-decoration: none; }
+.auth-error {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(255,59,92,.15);
+  border: 1px solid rgba(255,59,92,.35);
+  border-radius: 10px;
+  color: #ff8098;
+  font-size: 13px;
+}
