@@ -1,20 +1,24 @@
 /* ============================================================
    VIEW: CHATS — chat list listener + rendering, "+ New Chat"
    flow (direct / group), long-press context menu, Delete Chat,
-   and Leave Group.
+   Leave Group, and the new INVITE-ONLY group create flow.
 
-   Phase 1.1 updates:
-   1. Long-press now works reliably on mobile using Pointer Events
-      (pointerdown/pointermove/pointerup/pointercancel) which
-      unifies mouse + touch + pen and doesn't fight with scrolling.
-   2. Context menu for groups now shows "Leave Group" alongside
-      "Delete Chat".
-   3. Every interaction is guarded so a long-press never triggers
-      the row's click handler (opening the chat).
+   Phase 3.8 updates:
+   1. Group create now opens a full-screen modal with:
+        • Search bar (finds any user by name/@username)
+        • Friends list (from S.profile.friends)
+        • Multi-select checkboxes with live chips
+        • "Invite" button — creates the group with only YOU as
+          member, and puts all selected users in `invited`.
+   2. Every selected user gets a `group-invite` notification.
+   3. Group create no longer forces the invited users in —
+      they must accept via the invite preview.
+   4. All previous features (long-press, delete, leave) kept.
    ============================================================ */
 import {
   collection, addDoc, doc, query, where, onSnapshot, getDocs,
-  updateDoc, serverTimestamp, arrayUnion, arrayRemove, getDoc
+  updateDoc, serverTimestamp, arrayUnion, arrayRemove, getDoc,
+  limit, orderBy, startAt, endAt
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db } from './firebase.js';
 import { $, $$ } from './dom.js';
@@ -108,8 +112,7 @@ export function renderChats() {
 }
 
 // ============================================================
-// CHAT ROW INTERACTIONS (click + long-press + right-click)
-// Uses Pointer Events for reliable mobile long-press.
+// CHAT ROW INTERACTIONS (Pointer Events for reliable long-press)
 // ============================================================
 function attachChatInteractions(el, chat) {
   const LONG_PRESS_MS = 500;
@@ -128,16 +131,13 @@ function attachChatInteractions(el, chat) {
     el.classList.remove('pressing');
   };
 
-  // ---- Pointer Down: start long-press timer ----
   el.addEventListener('pointerdown', (e) => {
-    // Only start on primary button (mouse left / touch / pen)
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     pointerActive = true;
     didLongPress = false;
     startX = e.clientX;
     startY = e.clientY;
 
-    // Visual feedback after a short delay (avoid flicker on quick taps)
     setTimeout(() => {
       if (pointerActive) el.classList.add('pressing');
     }, 120);
@@ -148,12 +148,10 @@ function attachChatInteractions(el, chat) {
       didLongPress = true;
       el.classList.remove('pressing');
       openChatMenu(e.clientX, e.clientY, chat);
-      // Slight haptic feedback if supported
       if (navigator.vibrate) navigator.vibrate(20);
     }, LONG_PRESS_MS);
   }, { passive: true });
 
-  // ---- Pointer Move: cancel if finger/mouse moves too far ----
   el.addEventListener('pointermove', (e) => {
     if (!pointerActive) return;
     const dx = Math.abs(e.clientX - startX);
@@ -164,7 +162,6 @@ function attachChatInteractions(el, chat) {
     }
   }, { passive: true });
 
-  // ---- Pointer Up: cancel timer (short tap → click) ----
   const onPointerEnd = () => {
     pointerActive = false;
     cancelPress();
@@ -173,13 +170,11 @@ function attachChatInteractions(el, chat) {
   el.addEventListener('pointercancel', onPointerEnd);
   el.addEventListener('pointerleave', onPointerEnd);
 
-  // ---- Right-click (desktop) ----
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     openChatMenu(e.clientX, e.clientY, chat);
   });
 
-  // ---- Click: open chat, unless a long-press just fired ----
   el.addEventListener('click', (e) => {
     if (didLongPress) {
       didLongPress = false;
@@ -206,7 +201,6 @@ function openChatMenu(x, y, chat) {
     }
   ];
 
-  // Group-only: Leave Group
   if (chat.type === 'group') {
     items.push({
       icon: '🚪',
@@ -268,7 +262,6 @@ async function leaveGroup(chat) {
   try {
     const myUid = S.user.uid;
 
-    // Re-fetch latest to avoid race conditions
     const fresh = await getDoc(doc(db, 'chats', chat.id));
     if (!fresh.exists()) {
       toast('Group no longer exists', 'error');
@@ -278,12 +271,10 @@ async function leaveGroup(chat) {
     const members = (data.members || []).filter(u => u !== myUid);
     let admins = (data.admins || []).filter(u => u !== myUid);
 
-    // If I was the only admin and members remain → promote someone
     if (admins.length === 0 && members.length > 0) {
       admins = [members[0]];
     }
 
-    // If no members left → delete the chat entirely
     if (members.length === 0) {
       const { deleteDoc } = await import(
         "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
@@ -384,45 +375,317 @@ export async function startDirectChat(uid) {
 }
 
 // ============================================================
-// GROUP CREATE (Phase 3-এ upgrade হবে — এখন basic version)
+// GROUP CREATE FLOW  (Phase 3.8 — invite-only + search)
 // ============================================================
 export async function createGroupFlow() {
-  const friends = S.profile.friends || [];
-  if (friends.length === 0) return toast('Add friends first', 'error');
-  const profiles = (await Promise.all(friends.map(getUser))).filter(Boolean);
+  // Two-stage: (1) name input  →  (2) member picker
+  const name = await promptGroupName();
+  if (!name) return;
+  showMemberPicker(name);
+}
 
-  showModal('New Group (max 5 members)', `
-    <input type="text" id="grp-name" placeholder="Group name">
-    <div style="max-height:280px;overflow-y:auto;margin-bottom:10px">
-      ${profiles.map(p => `
-        <label class="list-item" style="cursor:pointer">
-          <input type="checkbox" value="${p.uid}" style="width:auto;margin-right:8px">
-          <div class="list-avatar" style="width:36px;height:36px"><img src="${avatarUrl(p)}"></div>
-          <div class="list-body"><div class="list-name">${escapeHtml(p.displayName)}</div></div>
-        </label>
-      `).join('')}
+function promptGroupName() {
+  return new Promise((resolve) => {
+    showModal('New Group — Step 1/2',
+      `<input type="text" id="grp-name-input" placeholder="Group name (e.g. Family)"
+              maxlength="40" autocomplete="off">`,
+      () => {
+        const v = $('#grp-name-input').value.trim();
+        if (!v) { toast('Please enter a group name', 'error'); return false; }
+        resolve(v);
+      }, 'Next');
+    // If user cancels, resolve(null)
+    const cancelBtn = $('#modal-cancel');
+    const originalCancel = cancelBtn.onclick;
+    cancelBtn.onclick = () => {
+      if (originalCancel) originalCancel();
+      resolve(null);
+    };
+  });
+}
+
+// ------------------------------------------------------------
+// Step 2 — Member picker (friends + search)
+// ------------------------------------------------------------
+function showMemberPicker(groupName) {
+  // Local selection state
+  const selected = new Map();   // uid -> profile
+
+  const modal = $('#modal');
+  $('#modal-title').textContent = 'New Group — Step 2/2';
+  $('#modal-body').innerHTML = `
+    <div class="picker-wrap">
+
+      <div class="picker-header">
+        <div class="picker-group-name">👥 ${escapeHtml(groupName)}</div>
+        <div class="picker-hint">
+          Friends added by default. Search to invite anyone else.
+        </div>
+      </div>
+
+      <div class="picker-selected" id="picker-selected">
+        <!-- selected chips appear here -->
+      </div>
+
+      <input type="text" id="picker-search" class="search-input"
+             placeholder="🔍 Search by name or @username..."
+             autocomplete="off">
+
+      <div class="picker-section-label">FRIENDS</div>
+      <div class="picker-list" id="picker-friends-list">
+        <div class="empty-state">Loading…</div>
+      </div>
+
+      <div class="picker-section-label" id="picker-search-label" style="display:none;">
+        SEARCH RESULTS
+      </div>
+      <div class="picker-list" id="picker-search-list" style="display:none;"></div>
+
     </div>
-  `, async () => {
-    const name = $('#grp-name').value.trim();
-    if (!name) { toast('Group name required', 'error'); return false; }
-    const checked = $$('#modal-body input[type=checkbox]:checked').map(c => c.value);
-    if (checked.length === 0) { toast('Select at least 1 friend', 'error'); return false; }
-    if (checked.length > 4) { toast('Max 4 friends (5 with you)', 'error'); return false; }
+  `;
 
-    const members = [S.user.uid, ...checked];
-    const ref = await addDoc(collection(db, 'chats'), {
+  $('#modal-ok').textContent = 'Send Invites';
+  $('#modal-ok').classList.remove('hidden');
+  $('#modal-cancel').textContent = 'Back';
+
+  // ---- Load friends list ----
+  renderFriendPicker(groupName, selected);
+
+  // ---- Search box ----
+  const searchEl = $('#picker-search');
+  searchEl.oninput = debounce(() => {
+    runPickerSearch(searchEl.value.trim(), groupName, selected);
+  }, 300);
+
+  // ---- Cancel → back to name step ----
+  $('#modal-cancel').onclick = () => {
+    modal.classList.add('hidden');
+    // Reopen name step
+    setTimeout(() => promptGroupName().then(n => { if (n) showMemberPicker(n); }), 50);
+  };
+
+  // ---- OK → create group with invites ----
+  $('#modal-ok').onclick = async () => {
+    if (selected.size === 0) {
+      toast('Select at least one person', 'error');
+      return false;
+    }
+    const invitedUids = [...selected.keys()];
+    modal.classList.add('hidden');
+    await finalizeGroupCreate(groupName, invitedUids);
+  };
+
+  modal.classList.remove('hidden');
+}
+
+// ---- Friends list render (with checkbox + click toggle) ----
+async function renderFriendPicker(groupName, selected) {
+  const container = $('#picker-friends-list');
+  const friends = S.profile?.friends || [];
+  if (friends.length === 0) {
+    container.innerHTML = '<div class="empty-state">No friends yet — use Search below to find people</div>';
+    return;
+  }
+  const profiles = (await Promise.all(friends.map(uid => getUser(uid)))).filter(Boolean);
+  container.innerHTML = '';
+  profiles.forEach(p => {
+    container.appendChild(buildPickerRow(p, selected, groupName));
+  });
+}
+
+// ---- Search users ----
+async function runPickerSearch(q, groupName, selected) {
+  const searchLabel = $('#picker-search-label');
+  const searchList = $('#picker-search-list');
+
+  if (!q || q.length < 2) {
+    searchLabel.style.display = 'none';
+    searchList.style.display = 'none';
+    searchList.innerHTML = '';
+    return;
+  }
+
+  searchLabel.style.display = '';
+  searchList.style.display = '';
+  searchList.innerHTML = '<div class="empty-state">Searching…</div>';
+
+  const clean = q.toLowerCase().replace(/^@+/, '');
+  const usersRef = collection(db, 'users');
+  const found = new Map();
+
+  // Username prefix
+  try {
+    const q1 = query(usersRef, orderBy('username'),
+      startAt(clean), endAt(clean + '\uf8ff'), limit(15));
+    const s1 = await getDocs(q1);
+    s1.forEach(d => {
+      if (d.id !== S.user.uid) found.set(d.id, { uid: d.id, ...d.data() });
+    });
+  } catch (e) { /* ignore */ }
+
+  // Display name prefix
+  try {
+    const cap = clean.charAt(0).toUpperCase() + clean.slice(1);
+    const q2 = query(usersRef, orderBy('displayName'),
+      startAt(cap), endAt(cap + '\uf8ff'), limit(15));
+    const s2 = await getDocs(q2);
+    s2.forEach(d => {
+      if (d.id !== S.user.uid) found.set(d.id, { uid: d.id, ...d.data() });
+    });
+  } catch (e) { /* ignore */ }
+
+  // Fallback: filter client side from a small page
+  if (found.size === 0) {
+    try {
+      const snapAll = await getDocs(query(usersRef, limit(150)));
+      snapAll.forEach(d => {
+        if (d.id === S.user.uid) return;
+        const u = d.data();
+        const un = (u.username || '').toLowerCase();
+        const dn = (u.displayName || '').toLowerCase();
+        if (un.includes(clean) || dn.includes(clean)) {
+          found.set(d.id, { uid: d.id, ...u });
+        }
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  const results = [...found.values()];
+  if (results.length === 0) {
+    searchList.innerHTML = '<div class="empty-state">No users found</div>';
+    return;
+  }
+
+  searchList.innerHTML = '';
+  results.forEach(p => {
+    S.userCache[p.uid] = p;
+    searchList.appendChild(buildPickerRow(p, selected, groupName));
+  });
+}
+
+// ---- Build a single picker row (checkbox style) ----
+function buildPickerRow(p, selected, groupName) {
+  const row = document.createElement('div');
+  row.className = 'picker-row';
+  row.dataset.uid = p.uid;
+
+  const isSelected = selected.has(p.uid);
+  if (isSelected) row.classList.add('selected');
+
+  row.innerHTML = `
+    <div class="picker-check">${isSelected ? '✓' : ''}</div>
+    <div class="list-avatar" style="width:40px;height:40px;">
+      <img src="${avatarUrl(p)}" alt="">
+    </div>
+    <div class="list-body">
+      <div class="list-name">${escapeHtml(p.displayName || 'User')}</div>
+      <div class="list-sub">@${escapeHtml(p.username || '')}</div>
+    </div>
+  `;
+
+  row.onclick = () => {
+    if (selected.has(p.uid)) {
+      selected.delete(p.uid);
+      row.classList.remove('selected');
+      row.querySelector('.picker-check').textContent = '';
+    } else {
+      selected.set(p.uid, p);
+      row.classList.add('selected');
+      row.querySelector('.picker-check').textContent = '✓';
+    }
+    updatePickerChips(selected);
+    // Keep all rows with same uid in sync (friend list + search)
+    $$(`.picker-row[data-uid="${p.uid}"]`).forEach(r => {
+      r.classList.toggle('selected', selected.has(p.uid));
+      const c = r.querySelector('.picker-check');
+      if (c) c.textContent = selected.has(p.uid) ? '✓' : '';
+    });
+  };
+
+  return row;
+}
+
+// ---- Selected chips row ----
+function updatePickerChips(selected) {
+  const wrap = $('#picker-selected');
+  if (!wrap) return;
+  if (selected.size === 0) {
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = '';
+  selected.forEach((p, uid) => {
+    const chip = document.createElement('div');
+    chip.className = 'picker-chip';
+    chip.innerHTML = `
+      <img src="${avatarUrl(p)}" alt="">
+      <span>${escapeHtml(p.displayName || p.username || 'User')}</span>
+      <button type="button" aria-label="Remove">×</button>
+    `;
+    chip.querySelector('button').onclick = (e) => {
+      e.stopPropagation();
+      selected.delete(uid);
+      updatePickerChips(selected);
+      $$(`.picker-row[data-uid="${uid}"]`).forEach(r => {
+        r.classList.remove('selected');
+        const c = r.querySelector('.picker-check');
+        if (c) c.textContent = '';
+      });
+    };
+    wrap.appendChild(chip);
+  });
+}
+
+// ------------------------------------------------------------
+// Create group + send invites
+// ------------------------------------------------------------
+async function finalizeGroupCreate(groupName, invitedUids) {
+  try {
+    // 1. Create chat doc — only the creator is a member for now
+    const chatRef = await addDoc(collection(db, 'chats'), {
       type: 'group',
-      members,
-      admins: [S.user.uid],
-      name,
+      name: groupName,
+      bio: '',
       photoURL: '',
+      members: [S.user.uid],
+      admins: [S.user.uid],
+      invited: invitedUids.slice(),      // pending invitations
       lastMessage: null,
       unread: {},
       hidden: [],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
-    toast('Group created ✅', 'success');
-    openChat(ref.id, { id: ref.id, type: 'group', members, name });
-  }, 'Create');
+    const chatId = chatRef.id;
+
+    // 2. Send a notification to each invited user
+    for (const uid of invitedUids) {
+      await addDoc(collection(db, 'users', uid, 'notifications'), {
+        icon: '👥',
+        title: 'Group Invitation',
+        text: `${S.profile.displayName} invited you to join "${groupName}"`,
+        type: 'group-invite',
+        chatId,
+        from: S.user.uid,
+        groupName,
+        read: false,
+        createdAt: serverTimestamp()
+      });
+    }
+
+    toast('Group created & invites sent ✅', 'success');
+
+    // 3. Open the new group chat (only me in it right now)
+    openChat(chatId, {
+      id: chatId,
+      type: 'group',
+      name: groupName,
+      members: [S.user.uid],
+      admins: [S.user.uid],
+      invited: invitedUids
+    });
+  } catch (err) {
+    console.error('[finalizeGroupCreate]', err);
+    toast('Could not create group', 'error');
+  }
 }
