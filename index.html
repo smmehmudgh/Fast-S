@@ -11,14 +11,42 @@
 
 <!-- ============ LOADER ============ -->
 <div id="loader" class="loader-screen">
-  <div class="loader-logo">Fast S</div>
+  <div class="loader-logo" style="display:flex;align-items:center;justify-content:center;gap:12px;background:none;">
+    <svg width="48" height="48" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="loaderBoltGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#00d4ff"/>
+          <stop offset="50%" stop-color="#7b2ff7"/>
+          <stop offset="100%" stop-color="#ff2e93"/>
+        </linearGradient>
+      </defs>
+      <path d="M13 2 L3 14 L11 14 L9 22 L21 10 L13 10 Z"
+            fill="url(#loaderBoltGrad)" stroke="url(#loaderBoltGrad)"
+            stroke-width="1" stroke-linejoin="round"/>
+    </svg>
+    <span style="font-size:42px;font-weight:800;letter-spacing:4px;background:linear-gradient(90deg,#00d4ff,#7b2ff7,#ff2e93);-webkit-background-clip:text;background-clip:text;color:transparent;">Fast S</span>
+  </div>
   <div class="spinner"></div>
 </div>
 
 <!-- ============ AUTH SCREEN ============ -->
 <div id="auth-screen" class="screen hidden">
   <div class="auth-card">
-    <div class="auth-logo">Fast S</div>
+    <div class="auth-logo" style="display:flex;align-items:center;justify-content:center;gap:10px;background:none;">
+      <svg width="40" height="40" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="authBoltGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00d4ff"/>
+            <stop offset="50%" stop-color="#7b2ff7"/>
+            <stop offset="100%" stop-color="#ff2e93"/>
+          </linearGradient>
+        </defs>
+        <path d="M13 2 L3 14 L11 14 L9 22 L21 10 L13 10 Z"
+              fill="url(#authBoltGrad)" stroke="url(#authBoltGrad)"
+              stroke-width="1" stroke-linejoin="round"/>
+      </svg>
+      <span style="font-size:36px;font-weight:800;letter-spacing:3px;background:linear-gradient(90deg,#00d4ff,#7b2ff7,#ff2e93);-webkit-background-clip:text;background-clip:text;color:transparent;">Fast S</span>
+    </div>
     <div class="auth-tabs">
       <button class="auth-tab active" data-tab="login">Login</button>
       <button class="auth-tab" data-tab="signup">Sign Up</button>
@@ -67,7 +95,26 @@
         </svg>
       </button>
       <img id="chat-partner-avatar" class="chat-partner-avatar hidden" src="" alt="">
-      <div id="topbar-title" class="topbar-title" data-clickable="false">Fast S</div>
+
+      <!-- Fast S logo (shown on Chats view) -->
+      <div id="topbar-logo" class="topbar-logo">
+        <svg class="topbar-bolt" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="topbarBoltGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#00d4ff"/>
+              <stop offset="50%" stop-color="#7b2ff7"/>
+              <stop offset="100%" stop-color="#ff2e93"/>
+            </linearGradient>
+          </defs>
+          <path d="M13 2 L3 14 L11 14 L9 22 L21 10 L13 10 Z"
+                fill="url(#topbarBoltGrad)" stroke="url(#topbarBoltGrad)"
+                stroke-width="1" stroke-linejoin="round"/>
+        </svg>
+        <span class="topbar-brand">Fast S</span>
+      </div>
+
+      <!-- Dynamic title (shown on other views) -->
+      <div id="topbar-title" class="topbar-title hidden" data-clickable="false">Fast S</div>
     </div>
     <div class="topbar-right">
       <button id="theme-btn" class="icon-btn" title="Theme">
@@ -191,7 +238,7 @@
     </div>
   </main>
 
-  <!-- Bottom Nav — SVG Icons -->
+  <!-- Bottom Nav -->
   <nav id="bottom-nav">
     <button class="nav-btn active" data-view="chats">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
