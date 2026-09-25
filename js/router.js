@@ -1,10 +1,14 @@
 /* ============================================================
-   Simple view router (Chats / Friends / Search / Profile / Chat)
-   + back-button (browser & mobile) handling.
+   Simple view router (Chats / Friends / Search / Profile / Chat /
+   User-Profile) + back-button (browser & mobile) handling.
 
-   FIX: render() was hiding every .view but never showing the
-   target view, which left the screen blank after any nav click.
-   Now it explicitly unhides #view-{name} before rendering.
+   Updates:
+   1. New 'user' view — shows another user's profile by reusing
+      #view-profile but calling renderProfile(uid).
+   2. render('user', { uid, from }) — remembers where we came
+      from so back-button returns there.
+   3. Back button / browser back both handle the user view.
+   4. Title is dynamic per view.
    ============================================================ */
 import { $, $$ } from './dom.js';
 import { S } from './state.js';
@@ -33,37 +37,61 @@ export const router = {
     // 1. Hide every view
     $$('.view').forEach(v => v.classList.add('hidden'));
 
-    // 2. ✅ Show the target view — this was the missing piece
-    const target = document.getElementById('view-' + view);
+    // 2. Decide which DOM container to show
+    //    'user' reuses #view-profile's DOM node
+    const domView = (view === 'user') ? 'profile' : view;
+    const target = document.getElementById('view-' + domView);
     if (target) target.classList.remove('hidden');
 
-    // 3. Update nav highlight
+    // 3. Update bottom nav highlight (user view belongs to no tab)
     $$('.nav-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.view === view);
+      const active = (view === 'user')
+        ? false
+        : b.dataset.view === view;
+      b.classList.toggle('active', active);
     });
 
     // 4. Render view-specific content
     if (view === 'chats')   renderChats();
     if (view === 'friends') renderFriends();
     if (view === 'search')  renderSearch();
-    if (view === 'profile') renderProfile();
+    if (view === 'profile') renderProfile();               // own profile
+    if (view === 'user')    renderProfile(opts.uid);       // other user
     if (view === 'chat')    renderChatView(opts.chatId);
 
-    // 5. Back button only shows inside a chat
-    $('#back-btn').classList.toggle('hidden', view !== 'chat');
+    // 5. Back button visibility
+    //    Show back arrow on: chat, user profile
+    const backVisible = (view === 'chat' || view === 'user');
+    $('#back-btn').classList.toggle('hidden', !backVisible);
 
     // 6. Topbar title
-    const titles = {
-      chats:   'Fast S',
-      friends: 'Friends',
-      search:  'Find People',
-      profile: 'Profile',
-      chat:    opts.title || 'Chat'
-    };
-    $('#topbar-title').textContent = titles[view] || 'Fast S';
+    let title = 'Fast S';
+    if (view === 'friends') title = 'Friends';
+    else if (view === 'search') title = 'Find People';
+    else if (view === 'profile') title = 'Profile';
+    else if (view === 'chat') title = opts.title || 'Chat';
+    else if (view === 'user') {
+      const u = S.userCache[opts.uid];
+      title = u?.displayName || 'Profile';
+    }
+    $('#topbar-title').textContent = title;
 
-    // 7. Hide bottom-nav while inside a chat
+    // 7. Hide bottom-nav while inside chat
     $('#bottom-nav').classList.toggle('hidden', view === 'chat');
+
+    // 8. Reset topbar partner avatar / clickable title when NOT in chat
+    if (view !== 'chat') {
+      const partnerAvatar = $('#chat-partner-avatar');
+      const titleEl = $('#topbar-title');
+      if (partnerAvatar) {
+        partnerAvatar.classList.add('hidden');
+        partnerAvatar.src = '';
+      }
+      if (titleEl) {
+        titleEl.dataset.clickable = 'false';
+        titleEl.onclick = null;
+      }
+    }
   }
 };
 
@@ -83,14 +111,14 @@ export function initBackButton() {
       return;
     }
 
-    // Chat view can't be restored from history — go back to chats
+    // Chat can't be restored from history (needs chatId + subs)
     if (st.view === 'chat') {
       closeActiveChat();
       router.render('chats');
       return;
     }
 
-    // Leaving a chat via back button → tear down chat subscriptions
+    // Leaving a chat → tear down subs
     if (S.currentView === 'chat') closeActiveChat();
 
     router.render(st.view, st.opts || {});
@@ -98,12 +126,23 @@ export function initBackButton() {
 
   // In-app back arrow (top-left)
   $('#back-btn').onclick = () => {
+    // From chat → go to chats
     if (S.currentView === 'chat') {
       closeActiveChat();
       history.pushState({ view: 'chats' }, '', '#chats');
       router.render('chats');
-    } else {
-      history.back();
+      return;
     }
+
+    // From user profile → go back to where we came from (opts.from)
+    if (S.currentView === 'user') {
+      const from = S.currentViewOpts?.from || 'chats';
+      history.pushState({ view: from }, '', '#' + from);
+      router.render(from);
+      return;
+    }
+
+    // Fallback
+    history.back();
   };
 }
