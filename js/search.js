@@ -1,13 +1,15 @@
 /* ============================================================
    VIEW: SEARCH — find users by name / @username.
 
-   Fixes:
+   Updates:
    1. Strip leading "@" so "@username" works.
-   2. Separate try/catch for each query — one failure doesn't
+   2. Three button states: Add / Sent / Message
+      - Sent → click opens "Unsend request?" confirmation
+   3. Separate try/catch for each query — one failure doesn't
       kill the whole search.
-   3. Fallback: fetch users and filter client-side if prefix
+   4. Fallback: fetch users & filter client-side if prefix
       queries return nothing (handles index still building).
-   4. Show the REAL error message instead of "try again".
+   5. Shows real error message instead of a vague one.
    ============================================================ */
 import {
   collection, query, orderBy, startAt, endAt, limit, getDocs
@@ -16,8 +18,10 @@ import { db } from './firebase.js';
 import { $ } from './dom.js';
 import { S } from './state.js';
 import { escapeHtml, debounce, avatarUrl } from './utils.js';
-import { sendFriendRequest } from './friends.js';
+import { sendFriendRequest, unsendRequest, hasSentRequest } from './friends.js';
 import { startDirectChat } from './chats.js';
+import { showModal } from './ui.js';
+import { router } from './router.js';
 
 export async function renderSearch() {
   const rawInput = ($('#user-search').value || '').trim();
@@ -117,28 +121,72 @@ export async function renderSearch() {
   results.forEach(p => {
     S.userCache[p.id] = p;
     const isFriend = (S.profile.friends || []).includes(p.id);
+    const isSent = hasSentRequest(p.id);
+
     const el = document.createElement('div');
     el.className = 'list-item';
+
+    // Avatar + name row
     el.innerHTML = `
       <div class="list-avatar"><img src="${avatarUrl(p)}"></div>
       <div class="list-body">
         <div class="list-name">${escapeHtml(p.displayName || 'User')}</div>
         <div class="list-sub">@${escapeHtml(p.username || '')}</div>
       </div>
-      <div class="list-actions">
-        ${isFriend
-          ? `<button class="mini-btn">Message</button>`
-          : `<button class="mini-btn accept">Add</button>`}
-      </div>
+      <div class="list-actions"></div>
     `;
-    const btn = el.querySelector('button');
+
+    // Click on row → open that user's profile
+    el.onclick = () => router.go('user', { uid: p.id, from: 'search' });
+
+    // Build the action button depending on state
+    const actions = el.querySelector('.list-actions');
+    const btn = document.createElement('button');
+    btn.className = 'mini-btn';
+
     if (isFriend) {
-      btn.onclick = (e) => { e.stopPropagation(); startDirectChat(p.id); };
+      btn.classList.add('message');
+      btn.textContent = '💬 Message';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        startDirectChat(p.id);
+      };
+    } else if (isSent) {
+      btn.classList.add('sent');
+      btn.textContent = '✓ Sent';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        confirmUnsend(p);
+      };
     } else {
-      btn.onclick = (e) => { e.stopPropagation(); sendFriendRequest(p.id); };
+      btn.classList.add('accept');
+      btn.textContent = '➕ Add';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        sendFriendRequest(p.id);
+      };
     }
+
+    actions.appendChild(btn);
     res.appendChild(el);
   });
+}
+
+// ============================================================
+// UNSEND CONFIRMATION
+// ============================================================
+function confirmUnsend(profile) {
+  showModal(
+    'Unsend Request',
+    `<p style="margin-bottom:8px">
+      Cancel the friend request you sent to
+      <b>${escapeHtml(profile.displayName || 'this user')}</b>?
+    </p>`,
+    async () => {
+      await unsendRequest(profile.id);
+    },
+    'Unsend'
+  );
 }
 
 $('#user-search').oninput = debounce(() => renderSearch(), 350);
