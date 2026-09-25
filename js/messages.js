@@ -2,10 +2,22 @@
    Messages: subscribe/render the message list, send a message,
    and every per-message action (reply, edit, delete, forward,
    star, report, reactions) plus their context menu.
+
+   Updates:
+   1. Two delete options:
+        • Delete for me       → adds uid to message.deletedFor
+        • Delete for everyone → hard-deletes the Firestore doc
+   2. renderMessages() skips messages where the current user is
+      in `deletedFor`.
+   3. The old "This message was deleted" placeholder is gone —
+      hard delete removes it, soft delete (for me) hides it.
+   4. Reply preview falls back gracefully if the original was
+      hard-deleted.
    ============================================================ */
 import {
   collection, addDoc, doc, query, orderBy, limit, onSnapshot,
-  updateDoc, writeBatch, arrayUnion, arrayRemove, serverTimestamp
+  updateDoc, deleteDoc, writeBatch, arrayUnion, arrayRemove,
+  serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db } from './firebase.js';
 import { $, $$ } from './dom.js';
@@ -27,7 +39,10 @@ export function subscribeMessages(chatId) {
     limit(200)
   );
   S.unsubMsgs = onSnapshot(q, (snap) => {
-    const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const msgs = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      // Skip messages the current user deleted for themselves
+      .filter(m => !(m.deletedFor || []).includes(S.user.uid));
     renderMessages(msgs);
     scrollChatToBottom();
     markMessagesRead(chatId, msgs);
@@ -63,12 +78,6 @@ function renderMessages(msgs) {
     row.className = 'msg-row ' + (out ? 'out' : 'in') + (isNewSender ? ' group-start' : '');
     row.dataset.msgId = m.id;
 
-    if (m.deleted) {
-      row.innerHTML = `<div class="bubble" style="opacity:.6;font-style:italic">This message was deleted</div>`;
-      container.appendChild(row);
-      return;
-    }
-
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
 
@@ -78,12 +87,21 @@ function renderMessages(msgs) {
       inner += `<div class="msg-sender">${escapeHtml(m.senderName || 'User')}</div>`;
     }
 
+    // Reply preview — hide if original content is gone
     if (m.replyTo) {
-      inner += `<div class="msg-reply-preview"><b>${escapeHtml(m.replyTo.senderName || 'User')}</b>${escapeHtml((m.replyTo.text || '').slice(0, 100))}</div>`;
+      const replyText = m.replyTo.text || '';
+      if (replyText) {
+        inner += `<div class="msg-reply-preview">
+          <b>${escapeHtml(m.replyTo.senderName || 'User')}</b>
+          ${escapeHtml(replyText.slice(0, 100))}
+        </div>`;
+      }
     }
 
+    // Content
     if (m.type === 'image' && m.fileURL) {
-      inner += `<img class="msg-image" src="${m.fileURL}" onclick="window.open('${m.fileURL}','_blank')" alt="photo">`;
+      inner += `<img class="msg-image" src="${m.fileURL}"
+        onclick="window.open('${m.fileURL}','_blank')" alt="photo">`;
     } else if (m.type === 'file' && m.fileURL) {
       inner += `<a class="msg-file" href="${m.fileURL}" download="${escapeHtml(m.fileName || 'file')}">
         <div class="msg-file-icon">📎</div>
@@ -96,18 +114,23 @@ function renderMessages(msgs) {
       inner += `<div>${escapeHtml(m.text || '')}</div>`;
     }
 
+    // Meta
     inner += `<div class="msg-meta">
       ${m.editedAt ? '<span class="edited">edited</span>' : ''}
       <span>${formatTime(m.createdAt)}</span>
       ${out ? `<span>${(m.readBy || []).length > 1 ? '✓✓' : '✓'}</span>` : ''}
     </div>`;
 
+    // Reactions
     if (m.reactions && Object.keys(m.reactions).length) {
       let rx = '<div class="reactions">';
       for (const [emoji, users] of Object.entries(m.reactions)) {
         if (!users || !users.length) continue;
         const mine = users.includes(S.user.uid);
-        rx += `<div class="reaction-chip" data-emoji="${emoji}" style="${mine ? 'outline:1px solid var(--accent)' : ''}">${emoji} ${users.length}</div>`;
+        rx += `<div class="reaction-chip" data-emoji="${emoji}"
+          style="${mine ? 'outline:1px solid var(--accent)' : ''}">
+          ${emoji} ${users.length}
+        </div>`;
       }
       rx += '</div>';
       inner += rx;
@@ -117,13 +140,19 @@ function renderMessages(msgs) {
     row.appendChild(bubble);
     container.appendChild(row);
 
-    // Context menu (right-click on desktop)
-    row.oncontextmenu = (e) => { e.preventDefault(); showMessageMenu(e.clientX, e.clientY, m, row); };
+    // Right-click on desktop
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      showMessageMenu(e.clientX, e.clientY, m, row);
+    };
 
     // Long-press on mobile
     let touchTimer;
+    let didLongPress = false;
     row.addEventListener('touchstart', (e) => {
+      didLongPress = false;
       touchTimer = setTimeout(() => {
+        didLongPress = true;
         const t = e.touches[0];
         showMessageMenu(t.clientX, t.clientY, m, row);
       }, 500);
@@ -131,8 +160,12 @@ function renderMessages(msgs) {
     row.addEventListener('touchend', () => clearTimeout(touchTimer));
     row.addEventListener('touchmove', () => clearTimeout(touchTimer));
 
+    // Reaction chip click → toggle
     row.querySelectorAll('.reaction-chip').forEach(chip => {
-      chip.onclick = (e) => { e.stopPropagation(); toggleReaction(S.activeChat, m, chip.dataset.emoji); };
+      chip.onclick = (e) => {
+        e.stopPropagation();
+        toggleReaction(S.activeChat, m, chip.dataset.emoji);
+      };
     });
   });
 }
@@ -143,7 +176,7 @@ function scrollChatToBottom() {
 }
 
 // ============================================================
-// MESSAGE CONTEXT MENU (reactions + actions)
+// MESSAGE CONTEXT MENU
 // ============================================================
 function showMessageMenu(x, y, m, row) {
   const isMine = m.sender === S.user.uid;
@@ -158,11 +191,13 @@ function showMessageMenu(x, y, m, row) {
     ${isMine ? `<div class="ctx-item" data-a="edit">✏️ Edit</div>` : ''}
     <div class="ctx-item" data-a="forward">↪️ Forward</div>
     <div class="ctx-item" data-a="star">⭐ ${(m.starredBy || []).includes(S.user.uid) ? 'Unstar' : 'Star'}</div>
-    ${isMine ? `<div class="ctx-divider"></div><div class="ctx-item danger" data-a="delete">🗑️ Delete</div>` : ''}
+    <div class="ctx-divider"></div>
+    <div class="ctx-item danger" data-a="delete-me">🗑️ Delete for me</div>
+    ${isMine ? `<div class="ctx-item danger" data-a="delete-all">🗑️ Delete for everyone</div>` : ''}
     ${!isMine ? `<div class="ctx-divider"></div><div class="ctx-item danger" data-a="report">🚩 Report</div>` : ''}
   `;
-  menu.style.left = Math.min(x, window.innerWidth - 220) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 320) + 'px';
+  menu.style.left = Math.min(x, window.innerWidth - 240) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 380) + 'px';
   menu.classList.remove('hidden');
 
   const hideCtx = () => menu.classList.add('hidden');
@@ -172,15 +207,17 @@ function showMessageMenu(x, y, m, row) {
     toggleReaction(S.activeChat, m, b.dataset.r);
     hideCtx();
   });
+
   menu.querySelectorAll('[data-a]').forEach(b => b.onclick = (e) => {
     e.stopPropagation();
     const a = b.dataset.a;
-    if (a === 'reply') setReply(m);
-    if (a === 'edit') editMessage(m);
-    if (a === 'delete') deleteMessage(m);
-    if (a === 'forward') forwardMessage(m);
-    if (a === 'star') starMessage(m);
-    if (a === 'report') reportMessage(m);
+    if (a === 'reply')           setReply(m);
+    if (a === 'edit')            editMessage(m);
+    if (a === 'forward')         forwardMessage(m);
+    if (a === 'star')            starMessage(m);
+    if (a === 'delete-me')       deleteForMe(m);
+    if (a === 'delete-all')      deleteForEveryone(m);
+    if (a === 'report')          reportMessage(m);
     hideCtx();
   });
 
@@ -194,6 +231,9 @@ function showMessageMenu(x, y, m, row) {
   }, 10);
 }
 
+// ============================================================
+// REACTIONS
+// ============================================================
 async function toggleReaction(chatId, msg, emoji) {
   const ref = doc(db, 'chats', chatId, 'messages', msg.id);
   const key = `reactions.${emoji}`;
@@ -203,6 +243,9 @@ async function toggleReaction(chatId, msg, emoji) {
   });
 }
 
+// ============================================================
+// REPLY
+// ============================================================
 function setReply(m) {
   S.replyTo = {
     msgId: m.id,
@@ -224,6 +267,9 @@ function setReply(m) {
   $('#message-input').focus();
 }
 
+// ============================================================
+// EDIT
+// ============================================================
 async function editMessage(m) {
   showModal('Edit Message',
     `<input type="text" id="edit-msg" value="${escapeHtml(m.text)}">`,
@@ -237,15 +283,42 @@ async function editMessage(m) {
     }, 'Save');
 }
 
-async function deleteMessage(m) {
-  confirmDialog('Delete', 'Delete this message?', async () => {
+// ============================================================
+// DELETE — FOR ME / FOR EVERYONE
+// ============================================================
+async function deleteForMe(m) {
+  try {
     await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), {
-      deleted: true, text: '', fileURL: '', type: 'text'
+      deletedFor: arrayUnion(S.user.uid)
     });
-    toast('Deleted');
-  }, 'Delete');
+    toast('Deleted for you', 'success');
+    // The listener auto-filters and re-renders — no manual removal needed
+  } catch (err) {
+    console.error('[deleteForMe]', err);
+    toast('Could not delete', 'error');
+  }
 }
 
+function deleteForEveryone(m) {
+  confirmDialog(
+    'Delete for Everyone',
+    'This message will be permanently deleted for all participants. Continue?',
+    async () => {
+      try {
+        await deleteDoc(doc(db, 'chats', S.activeChat, 'messages', m.id));
+        toast('Message deleted for everyone', 'success');
+      } catch (err) {
+        console.error('[deleteForEveryone]', err);
+        toast('Could not delete', 'error');
+      }
+    },
+    'Delete'
+  );
+}
+
+// ============================================================
+// FORWARD
+// ============================================================
 async function forwardMessage(m) {
   if (S.chats.length === 0) return toast('No chats to forward to');
   showModal('Forward to', S.chats.map(c => `
@@ -270,6 +343,7 @@ async function forwardMessage(m) {
         reactions: {},
         readBy: [S.user.uid],
         starredBy: [],
+        deletedFor: [],
         createdAt: serverTimestamp()
       });
       await updateDoc(doc(db, 'chats', cid), {
@@ -289,6 +363,9 @@ async function forwardMessage(m) {
   }, 30);
 }
 
+// ============================================================
+// STAR
+// ============================================================
 async function starMessage(m) {
   const ref = doc(db, 'chats', S.activeChat, 'messages', m.id);
   const has = (m.starredBy || []).includes(S.user.uid);
@@ -298,6 +375,9 @@ async function starMessage(m) {
   toast(has ? 'Unstarred' : 'Starred ✅', 'success');
 }
 
+// ============================================================
+// REPORT
+// ============================================================
 async function reportMessage(m) {
   showModal('Report', `
     <select id="report-reason">
@@ -329,7 +409,7 @@ export async function sendMessage() {
   input.value = '';
   await stopTyping();
 
-  // Check if other user blocked me
+  // Blocked check
   const otherUids = (S.activeChatData?.members || []).filter(u => u !== S.user.uid);
   for (const uid of otherUids) {
     const p = S.userCache[uid] || await getUser(uid);
@@ -347,6 +427,7 @@ export async function sendMessage() {
     reactions: {},
     readBy: [S.user.uid],
     starredBy: [],
+    deletedFor: [],
     createdAt: serverTimestamp()
   };
   if (S.replyTo) {
@@ -357,11 +438,8 @@ export async function sendMessage() {
 
   await addDoc(collection(db, 'chats', S.activeChat, 'messages'), msg);
 
-  // Increment unread for others
-  const unreadUpdates = {};
-  otherUids.forEach(uid => { unreadUpdates[`unread.${uid}`] = 1; });
-
-  await updateDoc(doc(db, 'chats', S.activeChat), {
+  // Update chat: lastMessage + un-hide for all members + bump unread
+  const update = {
     lastMessage: {
       text,
       senderName: S.profile.displayName,
@@ -369,8 +447,13 @@ export async function sendMessage() {
       createdAt: serverTimestamp(),
       type: 'text'
     },
-    updatedAt: serverTimestamp()
+    updatedAt: serverTimestamp(),
+    hidden: arrayRemove(S.user.uid)   // sending re-shows the chat for us
+  };
+  otherUids.forEach(uid => {
+    update[`unread.${uid}`] = 1;
   });
+  await updateDoc(doc(db, 'chats', S.activeChat), update);
 
   // Notify others
   for (const uid of otherUids) {
@@ -389,5 +472,8 @@ export async function sendMessage() {
 
 $('#send-btn').onclick = sendMessage;
 $('#message-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
 });
