@@ -1,10 +1,13 @@
 /* ============================================================
    VIEW: SEARCH — find users by name / @username.
 
-   NOTE: the original single-file app called startAt()/endAt()
-   here but never imported them from the Firestore SDK, so this
-   view silently threw and "Find People" never returned results.
-   Fixed below by importing them properly.
+   Fixes:
+   1. Strip leading "@" so "@username" works.
+   2. Separate try/catch for each query — one failure doesn't
+      kill the whole search.
+   3. Fallback: fetch users and filter client-side if prefix
+      queries return nothing (handles index still building).
+   4. Show the REAL error message instead of "try again".
    ============================================================ */
 import {
   collection, query, orderBy, startAt, endAt, limit, getDocs
@@ -17,7 +20,8 @@ import { sendFriendRequest } from './friends.js';
 import { startDirectChat } from './chats.js';
 
 export async function renderSearch() {
-  const q = ($('#user-search').value || '').trim().toLowerCase();
+  const rawInput = ($('#user-search').value || '').trim();
+  const q = rawInput.toLowerCase().replace(/^@+/, '');   // strip @
   const res = $('#search-results');
 
   if (!q) {
@@ -31,51 +35,110 @@ export async function renderSearch() {
 
   res.innerHTML = '<div class="empty-state">Searching...</div>';
 
+  const usersRef = collection(db, 'users');
+  const found = new Map();
+  const errors = [];
+
+  // ---- Query 1: username prefix ----
   try {
-    const usersRef = collection(db, 'users');
-    const q1 = query(usersRef, orderBy('username'), startAt(q), endAt(q + '\uf8ff'), limit(15));
-    const q2 = query(usersRef, orderBy('displayName'), startAt(q), endAt(q + '\uf8ff'), limit(15));
-    const [s1, s2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-
-    const map = new Map();
-    [...s1.docs, ...s2.docs].forEach(d => {
-      if (d.id !== S.user.uid) map.set(d.id, { id: d.id, ...d.data() });
+    const q1 = query(
+      usersRef,
+      orderBy('username'),
+      startAt(q),
+      endAt(q + '\uf8ff'),
+      limit(15)
+    );
+    const s1 = await getDocs(q1);
+    s1.forEach(d => {
+      if (d.id !== S.user.uid) found.set(d.id, { id: d.id, ...d.data() });
     });
-    const results = [...map.values()];
-
-    if (results.length === 0) {
-      res.innerHTML = '<div class="empty-state">No users found</div>';
-      return;
-    }
-    res.innerHTML = '';
-    results.forEach(p => {
-      S.userCache[p.id] = p;
-      const isFriend = (S.profile.friends || []).includes(p.id);
-      const el = document.createElement('div');
-      el.className = 'list-item';
-      el.innerHTML = `
-        <div class="list-avatar"><img src="${avatarUrl(p)}"></div>
-        <div class="list-body">
-          <div class="list-name">${escapeHtml(p.displayName)}</div>
-          <div class="list-sub">@${escapeHtml(p.username)}</div>
-        </div>
-        <div class="list-actions">
-          ${isFriend
-            ? `<button class="mini-btn">Message</button>`
-            : `<button class="mini-btn accept">Add</button>`}
-        </div>
-      `;
-      const btn = el.querySelector('button');
-      if (isFriend) {
-        btn.onclick = (e) => { e.stopPropagation(); startDirectChat(p.id); };
-      } else {
-        btn.onclick = (e) => { e.stopPropagation(); sendFriendRequest(p.id); };
-      }
-      res.appendChild(el);
-    });
-  } catch (err) {
-    console.error(err);
-    res.innerHTML = '<div class="empty-state">Search error — try again</div>';
+  } catch (e) {
+    console.warn('[search] username query failed:', e);
+    errors.push('username: ' + (e.message || e.code || 'unknown'));
   }
+
+  // ---- Query 2: displayName prefix ----
+  try {
+    const qCap = q.charAt(0).toUpperCase() + q.slice(1);
+    const q2 = query(
+      usersRef,
+      orderBy('displayName'),
+      startAt(qCap),
+      endAt(qCap + '\uf8ff'),
+      limit(15)
+    );
+    const s2 = await getDocs(q2);
+    s2.forEach(d => {
+      if (d.id !== S.user.uid) found.set(d.id, { id: d.id, ...d.data() });
+    });
+  } catch (e) {
+    console.warn('[search] displayName query failed:', e);
+    errors.push('displayName: ' + (e.message || e.code || 'unknown'));
+  }
+
+  // ---- Fallback: fetch limited users, filter client-side ----
+  if (found.size === 0) {
+    try {
+      const snapAll = await getDocs(query(usersRef, limit(200)));
+      snapAll.forEach(d => {
+        if (d.id === S.user.uid) return;
+        const u = d.data();
+        const uname = (u.username || '').toLowerCase();
+        const dname = (u.displayName || '').toLowerCase();
+        if (uname.startsWith(q) || dname.startsWith(q) ||
+            uname.includes(q) || dname.includes(q)) {
+          found.set(d.id, { id: d.id, ...u });
+        }
+      });
+    } catch (e) {
+      console.error('[search] fallback failed:', e);
+      errors.push('fallback: ' + (e.message || e.code || 'unknown'));
+    }
+  }
+
+  // ---- Render ----
+  const results = [...found.values()];
+
+  if (results.length === 0) {
+    res.innerHTML = `
+      <div class="empty-state">
+        <p>No users found for "${escapeHtml(rawInput)}"</p>
+        ${errors.length ? `<p style="font-size:11px;margin-top:10px;color:#ff8098;word-break:break-all">
+          Debug: ${escapeHtml(errors.join(' | '))}
+        </p>` : ''}
+        <p style="font-size:12px;margin-top:8px;color:var(--text-dim)">
+          Try a different spelling or a shorter name
+        </p>
+      </div>`;
+    return;
+  }
+
+  res.innerHTML = '';
+  results.forEach(p => {
+    S.userCache[p.id] = p;
+    const isFriend = (S.profile.friends || []).includes(p.id);
+    const el = document.createElement('div');
+    el.className = 'list-item';
+    el.innerHTML = `
+      <div class="list-avatar"><img src="${avatarUrl(p)}"></div>
+      <div class="list-body">
+        <div class="list-name">${escapeHtml(p.displayName || 'User')}</div>
+        <div class="list-sub">@${escapeHtml(p.username || '')}</div>
+      </div>
+      <div class="list-actions">
+        ${isFriend
+          ? `<button class="mini-btn">Message</button>`
+          : `<button class="mini-btn accept">Add</button>`}
+      </div>
+    `;
+    const btn = el.querySelector('button');
+    if (isFriend) {
+      btn.onclick = (e) => { e.stopPropagation(); startDirectChat(p.id); };
+    } else {
+      btn.onclick = (e) => { e.stopPropagation(); sendFriendRequest(p.id); };
+    }
+    res.appendChild(el);
+  });
 }
+
 $('#user-search').oninput = debounce(() => renderSearch(), 350);
