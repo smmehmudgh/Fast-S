@@ -1,21 +1,20 @@
 /* ============================================================
-   VIEW: CHATS — chat list listener + rendering, the "+ New Chat"
-   flow (direct / group), creating direct & group chats, and
-   long-press → delete chat (own side only).
+   VIEW: CHATS — chat list listener + rendering, "+ New Chat"
+   flow (direct / group), long-press context menu, Delete Chat,
+   and Leave Group.
 
-   Updates:
-   1. listenChats filters out chats where S.user.uid is in
-      chat.hidden (per-user hidden list).
-   2. Long-press (mobile) + right-click (desktop) on a chat
-      opens a context menu with "Delete Chat".
-   3. deleteChat(chatId) adds the uid to `hidden` array — the
-      other user still sees the chat.
-   4. Sending a new message re-shows the chat (removes uid from
-      hidden) — handled in messages.js.
+   Phase 1.1 updates:
+   1. Long-press now works reliably on mobile using Pointer Events
+      (pointerdown/pointermove/pointerup/pointercancel) which
+      unifies mouse + touch + pen and doesn't fight with scrolling.
+   2. Context menu for groups now shows "Leave Group" alongside
+      "Delete Chat".
+   3. Every interaction is guarded so a long-press never triggers
+      the row's click handler (opening the chat).
    ============================================================ */
 import {
   collection, addDoc, doc, query, where, onSnapshot, getDocs,
-  updateDoc, serverTimestamp, arrayUnion, arrayRemove
+  updateDoc, serverTimestamp, arrayUnion, arrayRemove, getDoc
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db } from './firebase.js';
 import { $, $$ } from './dom.js';
@@ -41,7 +40,6 @@ export function listenChats() {
     const chats = [];
     snap.forEach(d => {
       const data = { id: d.id, ...d.data() };
-      // Hide chats the user deleted from their own side
       if (data.hidden && data.hidden.includes(S.user.uid)) return;
       chats.push(data);
     });
@@ -104,61 +102,93 @@ export function renderChats() {
       </div>
     `;
 
-    // ---- Click / Long-press / Right-click ----
     attachChatInteractions(el, chat);
-
     list.appendChild(el);
   });
 }
 
+// ============================================================
+// CHAT ROW INTERACTIONS (click + long-press + right-click)
+// Uses Pointer Events for reliable mobile long-press.
+// ============================================================
 function attachChatInteractions(el, chat) {
-  let pressTimer = null;
-  let didLongPress = false;
-  let startX = 0, startY = 0;
+  const LONG_PRESS_MS = 500;
+  const MOVE_TOLERANCE = 10;
 
-  // Desktop right-click
-  el.oncontextmenu = (e) => {
-    e.preventDefault();
-    openChatMenu(e.clientX, e.clientY, chat);
+  let pressTimer = null;
+  let startX = 0, startY = 0;
+  let didLongPress = false;
+  let pointerActive = false;
+
+  const cancelPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    el.classList.remove('pressing');
   };
 
-  // Mobile long-press
-  el.addEventListener('touchstart', (e) => {
+  // ---- Pointer Down: start long-press timer ----
+  el.addEventListener('pointerdown', (e) => {
+    // Only start on primary button (mouse left / touch / pen)
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pointerActive = true;
     didLongPress = false;
-    const t = e.touches[0];
-    startX = t.clientX;
-    startY = t.clientY;
-    el.classList.add('pressing');
+    startX = e.clientX;
+    startY = e.clientY;
+
+    // Visual feedback after a short delay (avoid flicker on quick taps)
+    setTimeout(() => {
+      if (pointerActive) el.classList.add('pressing');
+    }, 120);
+
     pressTimer = setTimeout(() => {
+      pressTimer = null;
+      if (!pointerActive) return;
       didLongPress = true;
       el.classList.remove('pressing');
-      openChatMenu(t.clientX, t.clientY, chat);
-    }, 500);
+      openChatMenu(e.clientX, e.clientY, chat);
+      // Slight haptic feedback if supported
+      if (navigator.vibrate) navigator.vibrate(20);
+    }, LONG_PRESS_MS);
   }, { passive: true });
 
-  el.addEventListener('touchmove', (e) => {
-    const t = e.touches[0];
-    if (Math.abs(t.clientX - startX) > 8 || Math.abs(t.clientY - startY) > 8) {
-      clearTimeout(pressTimer);
-      el.classList.remove('pressing');
+  // ---- Pointer Move: cancel if finger/mouse moves too far ----
+  el.addEventListener('pointermove', (e) => {
+    if (!pointerActive) return;
+    const dx = Math.abs(e.clientX - startX);
+    const dy = Math.abs(e.clientY - startY);
+    if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) {
+      pointerActive = false;
+      cancelPress();
     }
   }, { passive: true });
 
-  el.addEventListener('touchend', () => {
-    clearTimeout(pressTimer);
-    el.classList.remove('pressing');
-  });
-
-  el.addEventListener('touchcancel', () => {
-    clearTimeout(pressTimer);
-    el.classList.remove('pressing');
-  });
-
-  // Click → open chat (unless long-press just fired)
-  el.onclick = () => {
-    if (didLongPress) { didLongPress = false; return; }
-    openChat(chat.id, chat);
+  // ---- Pointer Up: cancel timer (short tap → click) ----
+  const onPointerEnd = () => {
+    pointerActive = false;
+    cancelPress();
   };
+  el.addEventListener('pointerup', onPointerEnd);
+  el.addEventListener('pointercancel', onPointerEnd);
+  el.addEventListener('pointerleave', onPointerEnd);
+
+  // ---- Right-click (desktop) ----
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openChatMenu(e.clientX, e.clientY, chat);
+  });
+
+  // ---- Click: open chat, unless a long-press just fired ----
+  el.addEventListener('click', (e) => {
+    if (didLongPress) {
+      didLongPress = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    openChat(chat.id, chat);
+  });
 }
 
 // ============================================================
@@ -175,29 +205,104 @@ function openChatMenu(x, y, chat) {
       action: () => confirmDeleteChat(chat)
     }
   ];
+
+  // Group-only: Leave Group
+  if (chat.type === 'group') {
+    items.push({
+      icon: '🚪',
+      label: 'Leave Group',
+      danger: true,
+      action: () => confirmLeaveGroup(chat)
+    });
+  }
+
   showCtxMenu(x, y, items);
 }
 
+// ============================================================
+// DELETE CHAT (per-user hide)
+// ============================================================
 function confirmDeleteChat(chat) {
   const title = chatTitle(chat);
   const msg = chat.type === 'group'
-    ? `Delete "${title}" from your chat list? You will still see it if someone messages you.`
+    ? `Delete "${title}" from your chat list? You will still see it if someone messages you again.`
     : `Delete chat with "${title}"? It will only be removed from your side. You will still see it if they message you again.`;
 
   confirmDialog('Delete Chat', msg, async () => {
-    await deleteChat(chat.id);
+    try {
+      await updateDoc(doc(db, 'chats', chat.id), {
+        hidden: arrayUnion(S.user.uid)
+      });
+      toast('Chat deleted', 'success');
+    } catch (err) {
+      console.error('[deleteChat]', err);
+      toast('Could not delete chat', 'error');
+    }
   }, 'Delete');
 }
 
-async function deleteChat(chatId) {
+// ============================================================
+// LEAVE GROUP
+// ============================================================
+function confirmLeaveGroup(chat) {
+  const title = chatTitle(chat);
+  const isAdmin = (chat.admins || []).includes(S.user.uid);
+  const adminCount = (chat.admins || []).length;
+
+  let extra = '';
+  if (isAdmin && adminCount === 1 && (chat.members || []).length > 1) {
+    extra = '\n\nYou are the only admin. Another member will become admin automatically.';
+  }
+
+  confirmDialog(
+    'Leave Group',
+    `Leave "${title}"? You will stop receiving messages from this group.${extra}`,
+    async () => {
+      await leaveGroup(chat);
+    },
+    'Leave'
+  );
+}
+
+async function leaveGroup(chat) {
   try {
-    await updateDoc(doc(db, 'chats', chatId), {
-      hidden: arrayUnion(S.user.uid)
+    const myUid = S.user.uid;
+
+    // Re-fetch latest to avoid race conditions
+    const fresh = await getDoc(doc(db, 'chats', chat.id));
+    if (!fresh.exists()) {
+      toast('Group no longer exists', 'error');
+      return;
+    }
+    const data = fresh.data();
+    const members = (data.members || []).filter(u => u !== myUid);
+    let admins = (data.admins || []).filter(u => u !== myUid);
+
+    // If I was the only admin and members remain → promote someone
+    if (admins.length === 0 && members.length > 0) {
+      admins = [members[0]];
+    }
+
+    // If no members left → delete the chat entirely
+    if (members.length === 0) {
+      const { deleteDoc } = await import(
+        "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      );
+      await deleteDoc(doc(db, 'chats', chat.id));
+      toast('Group removed', 'success');
+      return;
+    }
+
+    await updateDoc(doc(db, 'chats', chat.id), {
+      members,
+      admins,
+      updatedAt: serverTimestamp()
     });
-    toast('Chat deleted', 'success');
+
+    toast('You left the group', 'success');
   } catch (err) {
-    console.error('[deleteChat] failed:', err);
-    toast('Could not delete chat', 'error');
+    console.error('[leaveGroup]', err);
+    toast('Could not leave group', 'error');
   }
 }
 
@@ -244,7 +349,6 @@ $('#chat-search').oninput = debounce(() => renderChats(), 200);
 // START DIRECT CHAT
 // ============================================================
 export async function startDirectChat(uid) {
-  // Look for an existing direct chat (even if hidden — reuse it)
   const q = query(collection(db, 'chats'),
     where('type', '==', 'direct'),
     where('members', 'array-contains', S.user.uid));
@@ -255,7 +359,6 @@ export async function startDirectChat(uid) {
   });
 
   if (existing) {
-    // Un-hide if it was hidden
     const data = existing.data();
     if (data.hidden && data.hidden.includes(S.user.uid)) {
       await updateDoc(doc(db, 'chats', existing.id), {
@@ -281,7 +384,7 @@ export async function startDirectChat(uid) {
 }
 
 // ============================================================
-// GROUP CHAT
+// GROUP CREATE (Phase 3-এ upgrade হবে — এখন basic version)
 // ============================================================
 export async function createGroupFlow() {
   const friends = S.profile.friends || [];
