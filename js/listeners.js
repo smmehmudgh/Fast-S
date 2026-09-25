@@ -7,19 +7,34 @@
 import { S } from './state.js';
 import { startPresence, stopPresence } from './presence.js';
 import { listenChats } from './chats.js';
-import { listenFriendRequests } from './friends.js';
+import { listenFriendRequests, listenSentRequests } from './friends.js';
 import { listenNotifications } from './notifications.js';
 
 export function startAllListeners() {
   startPresence();
   listenChats();
   listenFriendRequests();
+  listenSentRequests();       // ← নতুন
   listenNotifications();
 }
 
 export function stopAllListeners() {
   stopPresence();
-  [S.unsubChats, S.unsubMsgs, S.unsubTyping, S.unsubProfile, S.unsubNotifs, S.unsubRequests]
-    .forEach(u => u && u());
-  S.unsubChats = S.unsubMsgs = S.unsubTyping = S.unsubProfile = S.unsubNotifs = S.unsubRequests = null;
+  [
+    S.unsubChats,
+    S.unsubMsgs,
+    S.unsubTyping,
+    S.unsubProfile,
+    S.unsubNotifs,
+    S.unsubRequests,
+    S.unsubSentRequests     // ← নতুন
+  ].forEach(u => u && u());
+
+  S.unsubChats = null;
+  S.unsubMsgs = null;
+  S.unsubTyping = null;
+  S.unsubProfile = null;
+  S.unsubNotifs = null;
+  S.unsubRequests = null;
+  S.unsubSentRequests = null;
 }
