@@ -61,7 +61,8 @@
   <header id="topbar">
     <div class="topbar-left">
       <button id="back-btn" class="icon-btn hidden">←</button>
-      <div id="topbar-title" class="topbar-title">Fast S</div>
+      <img id="chat-partner-avatar" class="chat-partner-avatar hidden" src="" alt="">
+      <div id="topbar-title" class="topbar-title" data-clickable="false">Fast S</div>
     </div>
     <div class="topbar-right">
       <button id="theme-btn" class="icon-btn" title="Theme">🌓</button>
@@ -118,10 +119,15 @@
         <p id="profile-username" class="muted">@—</p>
         <p id="profile-bio" class="profile-bio">No bio yet</p>
       </div>
-      <div class="profile-actions">
+      <div class="profile-actions" id="profile-actions-self">
         <button id="edit-profile-btn" class="btn-secondary">Edit Profile</button>
         <button id="blocked-btn" class="btn-secondary">Blocked Users</button>
         <button id="settings-btn" class="btn-secondary">Settings</button>
+      </div>
+      <div class="profile-actions hidden" id="profile-actions-other">
+        <button id="other-message-btn" class="btn-primary">💬 Message</button>
+        <button id="other-add-btn" class="btn-secondary">➕ Add Friend</button>
+        <button id="other-sent-btn" class="btn-secondary hidden">✓ Sent</button>
       </div>
       <div id="profile-stats" class="profile-stats"></div>
       <button id="logout-btn" class="btn-danger">Logout</button>
