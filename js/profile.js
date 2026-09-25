@@ -1,22 +1,36 @@
 /* ============================================================
-   User profile: load/subscribe own profile, user cache lookups,
-   Profile view rendering, and all the Profile-view button
-   handlers (edit, avatar upload, blocked list, settings,
-   logout, delete account).
+   User profile — dual mode:
+     • renderProfile()        → own profile (edit, settings, logout)
+     • renderProfile(uid)     → other user's profile (message, add,
+                                 sent, unfriend, block)
+
+   Updates:
+   1. renderProfile(uid) accepts an optional uid. When omitted or
+      equal to own uid → own mode.
+   2. Own profile shows: Edit / Blocked / Settings + Logout / Delete.
+   3. Other profile shows: Message / Add Friend / Sent / Unfriend / Block.
+   4. Avatar upload label is hidden for other profiles.
+   5. All buttons are wired in one place.
    ============================================================ */
 import {
   doc, getDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { updateProfile as fbUpdateProfile, signOut, deleteUser } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import {
+  updateProfile as fbUpdateProfile, signOut, deleteUser
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { auth, db } from './firebase.js';
 import { $, $$ } from './dom.js';
 import { S } from './state.js';
 import { avatarUrl, escapeHtml } from './utils.js';
 import { toast, showModal, confirmDialog } from './ui.js';
 import { compressImage, IMAGE_MAX } from './files.js';
-import { unblockUser } from './friends.js';
+import { unblockUser, hasSentRequest, sendFriendRequest, unsendRequest } from './friends.js';
+import { startDirectChat } from './chats.js';
+import { router } from './router.js';
 
-// ===== Load / cache =====
+// ============================================================
+// LOAD / CACHE OWN PROFILE
+// ============================================================
 export async function loadUserProfile() {
   const snap = await getDoc(doc(db, 'users', S.user.uid));
   if (snap.exists()) {
@@ -28,6 +42,10 @@ export async function loadUserProfile() {
         S.profile = d.data();
         S.userCache[S.user.uid] = S.profile;
         updateTopbarAvatar();
+        // If viewing own profile, re-render live
+        if (S.currentView === 'profile' && !S.viewingUser) {
+          renderProfile();
+        }
       }
     });
   }
@@ -49,20 +67,136 @@ export async function getUser(uid) {
   return null;
 }
 
-// ===== VIEW: PROFILE =====
-export function renderProfile() {
-  if (!S.profile) return;
-  $('#profile-avatar').src = avatarUrl(S.profile);
-  $('#profile-name').textContent = S.profile.displayName;
-  $('#profile-username').textContent = '@' + (S.profile.username || '');
-  $('#profile-bio').textContent = S.profile.bio || 'No bio yet';
+// ============================================================
+// RENDER PROFILE (dual mode)
+// ============================================================
+export async function renderProfile(uid) {
+  const isSelf = !uid || uid === S.user.uid;
+
+  // ---- Resolve profile data ----
+  let profile;
+  if (isSelf) {
+    profile = S.profile;
+    S.viewingUser = null;
+    S.viewingUserData = null;
+  } else {
+    S.viewingUser = uid;
+    profile = await getUser(uid);
+    S.viewingUserData = profile;
+    if (!profile) {
+      toast('User not found', 'error');
+      router.go('chats');
+      return;
+    }
+  }
+
+  if (!profile) return;
+
+  // ---- Card ----
+  $('#profile-avatar').src = avatarUrl(profile);
+  $('#profile-name').textContent = profile.displayName || 'User';
+  $('#profile-username').textContent = '@' + (profile.username || '');
+  $('#profile-bio').textContent = profile.bio || (isSelf ? 'No bio yet' : 'No bio');
+
+  // ---- Avatar upload label (self only) ----
+  const uploadLabel = $('#avatar-upload-label');
+  if (uploadLabel) {
+    uploadLabel.classList.toggle('hidden', !isSelf);
+  }
+
+  // ---- Action groups ----
+  const actionsSelf = $('#profile-actions-self');
+  const actionsOther = $('#profile-actions-other');
+  const selfFooter = $('#profile-self-footer');
+
+  actionsSelf.classList.toggle('hidden', !isSelf);
+  actionsOther.classList.toggle('hidden', isSelf);
+  if (selfFooter) selfFooter.classList.toggle('hidden', !isSelf);
+
+  // ---- Stats ----
+  const friendCount = (profile.friends || []).length;
+  const blockedCount = isSelf ? (profile.blocked || []).length : 0;
+
+  // Chat count only meaningful for self
+  const chatCount = isSelf ? S.chats.length : 0;
+
   $('#profile-stats').innerHTML = `
-    <div class="stat-item"><div class="stat-value">${(S.profile.friends || []).length}</div><div class="stat-label">Friends</div></div>
-    <div class="stat-item"><div class="stat-value">${S.chats.length}</div><div class="stat-label">Chats</div></div>
-    <div class="stat-item"><div class="stat-value">${(S.profile.blocked || []).length}</div><div class="stat-label">Blocked</div></div>
+    <div class="stat-item">
+      <div class="stat-value">${friendCount}</div>
+      <div class="stat-label">Friends</div>
+    </div>
+    ${isSelf ? `
+      <div class="stat-item">
+        <div class="stat-value">${chatCount}</div>
+        <div class="stat-label">Chats</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">${blockedCount}</div>
+        <div class="stat-label">Blocked</div>
+      </div>
+    ` : ''}
   `;
+
+  // ---- Other-user actions state ----
+  if (!isSelf) {
+    const isFriend = (S.profile.friends || []).includes(uid);
+    const isSent = hasSentRequest(uid);
+
+    const btnMessage = $('#other-message-btn');
+    const btnAdd = $('#other-add-btn');
+    const btnSent = $('#other-sent-btn');
+    const btnUnfriend = $('#other-unfriend-btn');
+    const btnBlock = $('#other-block-btn');
+
+    // Message button: only if friends
+    btnMessage.classList.toggle('hidden', !isFriend);
+    // Add button: only if not friends and not already sent
+    btnAdd.classList.toggle('hidden', isFriend || isSent);
+    // Sent button: only if request sent
+    btnSent.classList.toggle('hidden', !isSent);
+    // Unfriend: only if friends
+    btnUnfriend.classList.toggle('hidden', !isFriend);
+    // Block: always visible
+
+    btnMessage.onclick = () => startDirectChat(uid);
+    btnAdd.onclick = async () => {
+      await sendFriendRequest(uid);
+      // Re-render so buttons update
+      setTimeout(() => renderProfile(uid), 300);
+    };
+    btnSent.onclick = () => {
+      showModal(
+        'Unsend Request',
+        `<p>Cancel the friend request you sent to <b>${escapeHtml(profile.displayName)}</b>?</p>`,
+        async () => {
+          await unsendRequest(uid);
+          setTimeout(() => renderProfile(uid), 300);
+        },
+        'Unsend'
+      );
+    };
+    btnUnfriend.onclick = () => {
+      confirmDialog('Unfriend',
+        `Remove ${escapeHtml(profile.displayName)} from friends?`,
+        async () => {
+          await doUnfriend(uid);
+          setTimeout(() => renderProfile(uid), 300);
+        }, 'Unfriend');
+    };
+    btnBlock.onclick = () => {
+      confirmDialog('Block User',
+        `Block ${escapeHtml(profile.displayName)}? They won't be able to message you.`,
+        async () => {
+          await doBlock(uid);
+          router.go('chats');
+        }, 'Block');
+    };
+  }
 }
 
+// ============================================================
+// OWN PROFILE — EDIT / BLOCKED / SETTINGS / LOGOUT / DELETE
+// ============================================================
 $('#edit-profile-btn').onclick = () => {
   showModal('Edit Profile', `
     <input type="text" id="edit-name" value="${escapeHtml(S.profile.displayName)}" placeholder="Display name">
@@ -80,7 +214,7 @@ $('#edit-profile-btn').onclick = () => {
   }, 'Save');
 };
 
-// Avatar upload — base64, no Storage
+// Avatar upload (self only, base64, no Storage)
 $('#avatar-upload').onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -176,3 +310,27 @@ $('#delete-account-btn').onclick = () => {
       }
     }, 'Delete');
 };
+
+// ============================================================
+// HELPERS — unfriend / block (used by other-profile view)
+// ============================================================
+async function doUnfriend(uid) {
+  const { writeBatch, arrayRemove } = await import(
+    "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+  );
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'users', S.user.uid), { friends: arrayRemove(uid) });
+  batch.update(doc(db, 'users', uid), { friends: arrayRemove(S.user.uid) });
+  await batch.commit();
+  await loadUserProfile();
+  toast('Unfriended');
+}
+
+async function doBlock(uid) {
+  const { arrayUnion } = await import(
+    "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+  );
+  await updateDoc(doc(db, 'users', S.user.uid), { blocked: arrayUnion(uid) });
+  await loadUserProfile();
+  toast('User blocked', 'error');
+}
