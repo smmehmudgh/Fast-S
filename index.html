@@ -112,29 +112,40 @@
       <div class="profile-card">
         <div class="profile-avatar-wrap">
           <img id="profile-avatar" class="profile-avatar" src="" alt="">
-          <label for="avatar-upload" class="avatar-upload-btn">📷</label>
+          <label for="avatar-upload" class="avatar-upload-btn hidden" id="avatar-upload-label">📷</label>
           <input type="file" id="avatar-upload" accept="image/*" hidden>
         </div>
         <h2 id="profile-name">—</h2>
         <p id="profile-username" class="muted">@—</p>
         <p id="profile-bio" class="profile-bio">No bio yet</p>
       </div>
+
+      <!-- Own profile actions -->
       <div class="profile-actions" id="profile-actions-self">
         <button id="edit-profile-btn" class="btn-secondary">Edit Profile</button>
         <button id="blocked-btn" class="btn-secondary">Blocked Users</button>
         <button id="settings-btn" class="btn-secondary">Settings</button>
       </div>
+
+      <!-- Other user profile actions -->
       <div class="profile-actions hidden" id="profile-actions-other">
         <button id="other-message-btn" class="btn-primary">💬 Message</button>
         <button id="other-add-btn" class="btn-secondary">➕ Add Friend</button>
         <button id="other-sent-btn" class="btn-secondary hidden">✓ Sent</button>
+        <button id="other-unfriend-btn" class="btn-secondary hidden">❌ Unfriend</button>
+        <button id="other-block-btn" class="btn-secondary">🚫 Block</button>
       </div>
+
       <div id="profile-stats" class="profile-stats"></div>
-      <button id="logout-btn" class="btn-danger">Logout</button>
-      <button id="delete-account-btn" class="btn-danger-outline">Delete Account</button>
+
+      <!-- Own profile only -->
+      <div id="profile-self-footer">
+        <button id="logout-btn" class="btn-danger">Logout</button>
+        <button id="delete-account-btn" class="btn-danger-outline">Delete Account</button>
+      </div>
     </div>
 
-    <!-- === CHAT VIEW (opens when chat is selected) === -->
+    <!-- === CHAT VIEW === -->
     <div id="view-chat" class="view hidden">
       <div id="chat-messages" class="chat-messages"></div>
       <div id="typing-indicator" class="typing-indicator hidden"></div>
