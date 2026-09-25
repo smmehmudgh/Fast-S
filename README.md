@@ -4,7 +4,7 @@
 
 ### A lightning-fast, real-time chat experience — built for the modern web.
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=22&duration=3000&pause=800&color=00D4FF&center=true&vCenter=true&width=700&lines=Real-time+messaging+%E2%9A%A1;Beautiful+UI+%F0%9F%8E%A8;Lightning+fast+%F0%9F%9A%80;Made+with+%E2%9D%A4%EF%B8%8F" alt="Typing SVG" />
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=22&duration=3000&pause=800&color=00D4FF&center=true&vCenter=true&width=700&lines=Real-time+messaging+%E2%9A%A1;Beautiful+UI+%F0%9F%8E%A8;Group+chats+%F0%9F%91%A5;Lightning+fast+%F0%9F%9A%80" alt="Typing SVG" />
 
 <br>
 
@@ -15,8 +15,9 @@
 <br>
 
 [![Typing](https://img.shields.io/badge/Typing%20Indicator-Live-00d4ff?style=flat-square)](#-features)
-[![Groups](https://img.shields.io/badge/Group%20Chats-Up%20to%205-7b2ff7?style=flat-square)](#-features)
-[![Reactions](https://img.shields.io/badge/Message%20Reactions-6%20Emojis-ff2e93?style=flat-square)](#-features)
+[![Groups](https://img.shields.io/badge/Group%20Chats-Unlimited-7b2ff7?style=flat-square)](#-features)
+[![Invites](https://img.shields.io/badge/Group%20Invites-✓-00e676?style=flat-square)](#-features)
+[![Reactions](https://img.shields.io/badge/Reactions-6%20Emojis-ff2e93?style=flat-square)](#-features)
 [![Dark Mode](https://img.shields.io/badge/Dark%20Mode-%E2%9C%93-ffc107?style=flat-square)](#-features)
 
 <img src="https://user-images.githubusercontent.com/74038190/212284100-561aa473-3905-4a80-b561-0d28506553ee.gif" width="100%" height="3px">
@@ -27,7 +28,7 @@
 
 ## 🌟 What is Fast S?
 
-**Fast S** is a beautifully crafted, real-time chat application that brings people together instantly. Whether it's a quick message to a friend or a group conversation with your squad — Fast S makes every chat feel alive.
+**Fast S** is a beautifully crafted, real-time chat application that brings people together instantly. From quick one-on-one messages to full group conversations with an invite-based join flow — Fast S makes every chat feel alive.
 
 > 💡 **Simple. Fast. Beautiful.** No clutter, no lag, just pure conversation.
 
@@ -56,7 +57,7 @@
 
 - ↩️ **Reply** to any message
 - ✏️ **Edit** your sent messages
-- 🗑️ **Delete** for yourself or for everyone
+- 🗑️ **Delete for me** or **Delete for everyone**
 - ↪️ **Forward** to any chat instantly
 - ⭐ **Star** messages you want to keep
 
@@ -90,14 +91,24 @@ React to any message with a single tap — no emoji picker needed.
 
 <br>
 
-### 👨‍👩‍👧‍👦 **Group Chats**
+### 👨‍👩‍👧‍👦 **Group Chats** (Invite-Based)
 
-Bring up to **5 people** into a single conversation.
+Create groups with **unlimited members** — no cap, no limit.
 
-- 🎉 Create groups in seconds
-- 👑 Admin controls for group management
-- 🖼️ Custom group avatars
-- 💬 Same rich features as direct chats
+<div align="center">
+
+| 🎉 Create | 📩 Invite | 👑 Manage |
+|:---:|:---:|:---:|
+| Search any user, add them from friends or by username | Invitees get a preview & join on their terms | Admins can kick, promote, edit, and add more |
+
+</div>
+
+- 🔒 **Invite-only** — no one is added without consent
+- 👀 **Preview before joining** — see the group, admin, and members
+- ✅ **Join / Decline** — accept on your own terms
+- 👑 **Admin controls** — promote members, kick, edit name/bio/avatar
+- 📊 **Live member list** with admin badges
+- 🖼️ **Custom group avatars** with compression
 
 <br>
 
@@ -124,7 +135,7 @@ Share photos and documents without ever leaving the chat.
 - 🌓 **Dark / Light mode** — your eyes, your choice
 - 📱 **Fully responsive** — mobile, tablet, desktop
 - ✨ **Smooth animations** — every tap feels alive
-- 🎭 **Skeleton loaders** — perceived speed matters
+- 🎭 **Loading states** — perceived speed matters
 
 </td>
 <td width="50%">
@@ -173,6 +184,12 @@ Share photos and documents without ever leaving the chat.
 
 <br><br>
 
+### 👥 Group Info & Members
+
+<img src="https://via.placeholder.com/800x450/0a0e27/00e676?text=Group+Info" alt="Group Info" width="90%">
+
+<br><br>
+
 ### 👤 Your Profile
 
 <img src="https://via.placeholder.com/800x450/0a0e27/ff2e93?text=Profile" alt="Profile" width="90%">
@@ -190,9 +207,10 @@ Share photos and documents without ever leaving the chat.
 - 🎙️ Voice messages
 - 📞 Voice & video calls
 - 📌 Pin, mute & archive chats
-- 🔍 In-chat search
+- 🔍 In-chat message search
 - 📱 Install as an app (PWA)
 - 🌍 Multi-language support
+- 🤖 AI-assisted replies
 
 </div>
 
@@ -204,7 +222,7 @@ Share photos and documents without ever leaving the chat.
 
 <div align="center">
 
-**Your Name**
+**Sazid Mehmud**
 
 *Building the future, one line at a time.*
 
