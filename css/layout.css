@@ -10,6 +10,25 @@
 }
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 8px; }
 .topbar-title { font-weight: 700; font-size: 17px; }
+
+/* Clickable title (chat view only) */
+.topbar-title[data-clickable="true"] {
+  cursor: pointer;
+  transition: color .15s;
+}
+.topbar-title[data-clickable="true"]:hover {
+  color: var(--accent);
+}
+
+/* Chat partner avatar in topbar */
+.chat-partner-avatar {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--accent);
+  flex-shrink: 0;
+}
+
 .icon-btn {
   width: 38px; height: 38px;
   display: flex; align-items: center; justify-content: center;
