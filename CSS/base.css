@@ -1,0 +1,79 @@
+/* ===== THEME ===== */
+:root {
+  --bg: #0a0e27;
+  --bg-2: #131832;
+  --bg-3: #1a1f3a;
+  --surface: #1a1f3a;
+  --surface-2: #232849;
+  --border: rgba(120,150,255,.18);
+  --text: #e4ebff;
+  --text-dim: #8b96c4;
+  --accent: #00d4ff;
+  --accent-2: #7b2ff7;
+  --green: #00e676;
+  --red: #ff3b5c;
+  --yellow: #ffc107;
+  --bubble-out: linear-gradient(135deg, #00d4ff, #7b2ff7);
+  --bubble-in: #232849;
+  --radius: 14px;
+  --shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+body.light {
+  --bg: #eef2ff;
+  --bg-2: #e4e9ff;
+  --bg-3: #dae0ff;
+  --surface: #ffffff;
+  --surface-2: #f1f4ff;
+  --border: rgba(80,100,200,.15);
+  --text: #1a2040;
+  --text-dim: #667;
+  --bubble-out: linear-gradient(135deg, #4a8aff, #7b2ff7);
+  --bubble-in: #ffffff;
+  --shadow: 0 8px 32px rgba(80,100,200,.15);
+}
+
+/* ===== RESET ===== */
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body {
+  height: 100%; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg);
+  transition: background .3s, color .3s;
+}
+button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; border: none; background: none; }
+input, textarea { outline: none; border: none; background: none; }
+.hidden { display: none !important; }
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(120,150,255,.25); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== LOADER ===== */
+.loader-screen {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #0a0e27, #1a1f4a, #2a1a4a);
+  z-index: 9999;
+  gap: 24px;
+}
+.loader-logo {
+  font-size: 42px; font-weight: 800; letter-spacing: 4px;
+  background: linear-gradient(90deg,#00d4ff,#7b2ff7,#ff2e93);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid rgba(120,150,255,.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== SCREENS ===== */
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
