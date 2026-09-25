@@ -3,16 +3,16 @@
    and every per-message action (reply, edit, delete, forward,
    star, report, reactions) plus their context menu.
 
-   Updates:
-   1. Two delete options:
-        • Delete for me       → adds uid to message.deletedFor
-        • Delete for everyone → hard-deletes the Firestore doc
-   2. renderMessages() skips messages where the current user is
-      in `deletedFor`.
-   3. The old "This message was deleted" placeholder is gone —
-      hard delete removes it, soft delete (for me) hides it.
-   4. Reply preview falls back gracefully if the original was
-      hard-deleted.
+   Phase 1.2 updates:
+   1. Context menu now measures its own size AFTER being rendered
+      (invisible) and positions itself so it never overflows the
+      viewport — flips up/left when there isn't room below/right.
+   2. Menu is centered horizontally on mobile when opened near
+      the edge.
+   3. Long-press uses Pointer Events (same as chat list) so it
+      works reliably on touch devices.
+   4. Menu auto-closes on scroll / resize / orientation change so
+      it can never be left floating outside the visible area.
    ============================================================ */
 import {
   collection, addDoc, doc, query, orderBy, limit, onSnapshot,
@@ -41,7 +41,6 @@ export function subscribeMessages(chatId) {
   S.unsubMsgs = onSnapshot(q, (snap) => {
     const msgs = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
-      // Skip messages the current user deleted for themselves
       .filter(m => !(m.deletedFor || []).includes(S.user.uid));
     renderMessages(msgs);
     scrollChatToBottom();
@@ -87,7 +86,6 @@ function renderMessages(msgs) {
       inner += `<div class="msg-sender">${escapeHtml(m.senderName || 'User')}</div>`;
     }
 
-    // Reply preview — hide if original content is gone
     if (m.replyTo) {
       const replyText = m.replyTo.text || '';
       if (replyText) {
@@ -98,7 +96,6 @@ function renderMessages(msgs) {
       }
     }
 
-    // Content
     if (m.type === 'image' && m.fileURL) {
       inner += `<img class="msg-image" src="${m.fileURL}"
         onclick="window.open('${m.fileURL}','_blank')" alt="photo">`;
@@ -114,14 +111,12 @@ function renderMessages(msgs) {
       inner += `<div>${escapeHtml(m.text || '')}</div>`;
     }
 
-    // Meta
     inner += `<div class="msg-meta">
       ${m.editedAt ? '<span class="edited">edited</span>' : ''}
       <span>${formatTime(m.createdAt)}</span>
       ${out ? `<span>${(m.readBy || []).length > 1 ? '✓✓' : '✓'}</span>` : ''}
     </div>`;
 
-    // Reactions
     if (m.reactions && Object.keys(m.reactions).length) {
       let rx = '<div class="reactions">';
       for (const [emoji, users] of Object.entries(m.reactions)) {
@@ -140,26 +135,6 @@ function renderMessages(msgs) {
     row.appendChild(bubble);
     container.appendChild(row);
 
-    // Right-click on desktop
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      showMessageMenu(e.clientX, e.clientY, m, row);
-    };
-
-    // Long-press on mobile
-    let touchTimer;
-    let didLongPress = false;
-    row.addEventListener('touchstart', (e) => {
-      didLongPress = false;
-      touchTimer = setTimeout(() => {
-        didLongPress = true;
-        const t = e.touches[0];
-        showMessageMenu(t.clientX, t.clientY, m, row);
-      }, 500);
-    }, { passive: true });
-    row.addEventListener('touchend', () => clearTimeout(touchTimer));
-    row.addEventListener('touchmove', () => clearTimeout(touchTimer));
-
     // Reaction chip click → toggle
     row.querySelectorAll('.reaction-chip').forEach(chip => {
       chip.onclick = (e) => {
@@ -167,7 +142,74 @@ function renderMessages(msgs) {
         toggleReaction(S.activeChat, m, chip.dataset.emoji);
       };
     });
+
+    // Interactions: right-click + long-press + tap
+    attachMessageInteractions(row, m);
   });
+}
+
+// ============================================================
+// MESSAGE ROW INTERACTIONS
+// Right-click (desktop) → open menu immediately
+// Long-press (touch) → open menu after 500ms
+// Tap → nothing (so user can still select text or react)
+// ============================================================
+function attachMessageInteractions(row, m) {
+  const LONG_PRESS_MS = 500;
+  const MOVE_TOLERANCE = 10;
+
+  let pressTimer = null;
+  let startX = 0, startY = 0;
+  let pointerActive = false;
+
+  const cancelPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  };
+
+  // Desktop right-click
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showMessageMenu(e.clientX, e.clientY, m);
+  });
+
+  // Pointer down — start long-press
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pointerActive = true;
+    startX = e.clientX;
+    startY = e.clientY;
+
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      if (!pointerActive) return;
+      showMessageMenu(e.clientX, e.clientY, m);
+      if (navigator.vibrate) navigator.vibrate(20);
+      pointerActive = false;
+    }, LONG_PRESS_MS);
+  }, { passive: true });
+
+  // Pointer move — cancel if moved too far
+  row.addEventListener('pointermove', (e) => {
+    if (!pointerActive) return;
+    const dx = Math.abs(e.clientX - startX);
+    const dy = Math.abs(e.clientY - startY);
+    if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) {
+      pointerActive = false;
+      cancelPress();
+    }
+  }, { passive: true });
+
+  // Pointer up / cancel — stop timer
+  const end = () => {
+    pointerActive = false;
+    cancelPress();
+  };
+  row.addEventListener('pointerup', end);
+  row.addEventListener('pointercancel', end);
+  row.addEventListener('pointerleave', end);
 }
 
 function scrollChatToBottom() {
@@ -176,15 +218,16 @@ function scrollChatToBottom() {
 }
 
 // ============================================================
-// MESSAGE CONTEXT MENU
+// MESSAGE CONTEXT MENU  (smart positioning)
 // ============================================================
-function showMessageMenu(x, y, m, row) {
+function showMessageMenu(x, y, m) {
   const isMine = m.sender === S.user.uid;
   const menu = $('#context-menu');
   const reactions = ['❤️', '😂', '👍', '😮', '😢', '🙏'];
 
+  // Build content
   menu.innerHTML = `
-    <div class="reaction-picker" style="position:static;margin-bottom:6px;justify-content:center">
+    <div class="reaction-picker" style="position:static;margin-bottom:6px;justify-content:center;flex-wrap:wrap">
       ${reactions.map(r => `<button data-r="${r}">${r}</button>`).join('')}
     </div>
     <div class="ctx-item" data-a="reply">↩️ Reply</div>
@@ -196,12 +239,54 @@ function showMessageMenu(x, y, m, row) {
     ${isMine ? `<div class="ctx-item danger" data-a="delete-all">🗑️ Delete for everyone</div>` : ''}
     ${!isMine ? `<div class="ctx-divider"></div><div class="ctx-item danger" data-a="report">🚩 Report</div>` : ''}
   `;
-  menu.style.left = Math.min(x, window.innerWidth - 240) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 380) + 'px';
+
+  // -------- Show off-screen to measure --------
+  menu.style.visibility = 'hidden';
+  menu.style.left = '-9999px';
+  menu.style.top = '-9999px';
   menu.classList.remove('hidden');
 
-  const hideCtx = () => menu.classList.add('hidden');
+  // Force layout so we can measure the real size
+  const rect = menu.getBoundingClientRect();
+  const menuW = rect.width;
+  const menuH = rect.height;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
 
+  const MARGIN = 10;
+
+  // -------- Horizontal position --------
+  let left = x - menuW / 2;                       // try centered on touch point
+  if (left < MARGIN) left = MARGIN;               // clamp to left edge
+  if (left + menuW > vw - MARGIN) {               // clamp to right edge
+    left = vw - menuW - MARGIN;
+  }
+
+  // -------- Vertical position --------
+  let top;
+  const roomBelow = vh - y;
+  const roomAbove = y;
+
+  if (roomBelow >= menuH + MARGIN) {
+    // Enough room below → open downward
+    top = y + 6;
+  } else if (roomAbove >= menuH + MARGIN) {
+    // Not enough below but enough above → open upward
+    top = y - menuH - 6;
+  } else {
+    // Neither fits — pin to the bottom, allow scroll inside
+    top = vh - menuH - MARGIN;
+    if (top < MARGIN) top = MARGIN;
+    menu.style.maxHeight = (vh - MARGIN * 2) + 'px';
+    menu.style.overflowY = 'auto';
+  }
+
+  // Apply final position
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  menu.style.visibility = '';
+
+  // -------- Wire actions --------
   menu.querySelectorAll('[data-r]').forEach(b => b.onclick = (e) => {
     e.stopPropagation();
     toggleReaction(S.activeChat, m, b.dataset.r);
@@ -221,13 +306,35 @@ function showMessageMenu(x, y, m, row) {
     hideCtx();
   });
 
+  // -------- Auto-close hooks --------
+  const hideCtx = () => {
+    menu.classList.add('hidden');
+    menu.style.maxHeight = '';
+    menu.style.overflowY = '';
+    cleanupAutoClose();
+  };
+
+  const onScroll = () => hideCtx();
+  const onResize = () => hideCtx();
+  const onKey = (e) => { if (e.key === 'Escape') hideCtx(); };
+  const onOutsideClick = (e) => {
+    if (!menu.contains(e.target)) hideCtx();
+  };
+
+  function cleanupAutoClose() {
+    document.removeEventListener('click', onOutsideClick);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('orientationchange', onResize);
+    $('#chat-messages')?.removeEventListener('scroll', onScroll);
+  }
+
   setTimeout(() => {
-    document.addEventListener('click', function c(e) {
-      if (!menu.contains(e.target)) {
-        hideCtx();
-        document.removeEventListener('click', c);
-      }
-    });
+    document.addEventListener('click', onOutsideClick);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    $('#chat-messages')?.addEventListener('scroll', onScroll, { passive: true });
   }, 10);
 }
 
@@ -244,7 +351,7 @@ async function toggleReaction(chatId, msg, emoji) {
 }
 
 // ============================================================
-// REPLY
+// REPLY / EDIT / DELETE / FORWARD / STAR / REPORT
 // ============================================================
 function setReply(m) {
   S.replyTo = {
@@ -267,9 +374,6 @@ function setReply(m) {
   $('#message-input').focus();
 }
 
-// ============================================================
-// EDIT
-// ============================================================
 async function editMessage(m) {
   showModal('Edit Message',
     `<input type="text" id="edit-msg" value="${escapeHtml(m.text)}">`,
@@ -283,16 +387,12 @@ async function editMessage(m) {
     }, 'Save');
 }
 
-// ============================================================
-// DELETE — FOR ME / FOR EVERYONE
-// ============================================================
 async function deleteForMe(m) {
   try {
     await updateDoc(doc(db, 'chats', S.activeChat, 'messages', m.id), {
       deletedFor: arrayUnion(S.user.uid)
     });
     toast('Deleted for you', 'success');
-    // The listener auto-filters and re-renders — no manual removal needed
   } catch (err) {
     console.error('[deleteForMe]', err);
     toast('Could not delete', 'error');
@@ -316,9 +416,6 @@ function deleteForEveryone(m) {
   );
 }
 
-// ============================================================
-// FORWARD
-// ============================================================
 async function forwardMessage(m) {
   if (S.chats.length === 0) return toast('No chats to forward to');
   showModal('Forward to', S.chats.map(c => `
@@ -363,9 +460,6 @@ async function forwardMessage(m) {
   }, 30);
 }
 
-// ============================================================
-// STAR
-// ============================================================
 async function starMessage(m) {
   const ref = doc(db, 'chats', S.activeChat, 'messages', m.id);
   const has = (m.starredBy || []).includes(S.user.uid);
@@ -375,9 +469,6 @@ async function starMessage(m) {
   toast(has ? 'Unstarred' : 'Starred ✅', 'success');
 }
 
-// ============================================================
-// REPORT
-// ============================================================
 async function reportMessage(m) {
   showModal('Report', `
     <select id="report-reason">
@@ -409,7 +500,6 @@ export async function sendMessage() {
   input.value = '';
   await stopTyping();
 
-  // Blocked check
   const otherUids = (S.activeChatData?.members || []).filter(u => u !== S.user.uid);
   for (const uid of otherUids) {
     const p = S.userCache[uid] || await getUser(uid);
@@ -438,7 +528,6 @@ export async function sendMessage() {
 
   await addDoc(collection(db, 'chats', S.activeChat, 'messages'), msg);
 
-  // Update chat: lastMessage + un-hide for all members + bump unread
   const update = {
     lastMessage: {
       text,
@@ -448,14 +537,13 @@ export async function sendMessage() {
       type: 'text'
     },
     updatedAt: serverTimestamp(),
-    hidden: arrayRemove(S.user.uid)   // sending re-shows the chat for us
+    hidden: arrayRemove(S.user.uid)
   };
   otherUids.forEach(uid => {
     update[`unread.${uid}`] = 1;
   });
   await updateDoc(doc(db, 'chats', S.activeChat), update);
 
-  // Notify others
   for (const uid of otherUids) {
     await addDoc(collection(db, 'users', uid, 'notifications'), {
       icon: '💬',
