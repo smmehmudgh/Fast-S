@@ -1,4 +1,23 @@
-/* ===== PROFILE ===== */
+/* ============================================================
+   Profile + Group Info + Group Preview styling.
+
+   Phase 3.4 updates:
+   1. Kept all existing profile styles.
+   2. Added Group Info page: large avatar, name, bio, action bar,
+      members grid, member rows with admin crown + kick button.
+   3. Added Group Preview: card showing group details before join,
+      Join / Decline buttons at the bottom.
+   4. Shared card design between profile and group views.
+   ============================================================ */
+
+/* ============================================================
+   PROFILE VIEW (own + other user)
+   ============================================================ */
+#view-profile {
+  overflow-y: auto;
+  padding-bottom: 80px;
+}
+
 .profile-card {
   display: flex; flex-direction: column; align-items: center;
   padding: 24px 20px 16px;
@@ -22,22 +41,28 @@
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  font-size: 16px;
   border: 3px solid var(--bg-2);
+  transition: transform .15s;
 }
+.avatar-upload-btn:hover { transform: scale(1.08); }
+.avatar-upload-btn:active { transform: scale(.94); }
+
 .profile-bio {
   text-align: center;
   color: var(--text-dim);
   font-size: 13px;
   max-width: 300px;
   padding: 4px 12px;
+  line-height: 1.5;
 }
+
 .profile-actions {
   display: flex; flex-wrap: wrap; gap: 8px;
   padding: 0 16px 14px;
   justify-content: center;
 }
 .profile-actions button { font-size: 13px; padding: 9px 14px; }
+
 .profile-stats {
   display: flex; justify-content: space-around;
   padding: 12px 20px;
@@ -48,9 +73,457 @@
 }
 .stat-item { text-align: center; }
 .stat-value { font-size: 20px; font-weight: 700; color: var(--accent); }
-.stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; }
-#view-profile { overflow-y: auto; padding-bottom: 80px; }
-#view-profile .btn-danger, #view-profile .btn-danger-outline {
+.stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+#view-profile .btn-danger,
+#view-profile .btn-danger-outline {
   margin: 4px 16px 10px;
   width: calc(100% - 32px);
+}
+
+/* ============================================================
+   GROUP INFO VIEW
+   ============================================================ */
+#view-group-info {
+  overflow-y: auto;
+  padding-bottom: 40px;
+}
+
+.group-info-card {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 26px 20px 18px;
+  gap: 10px;
+}
+
+.group-info-avatar-wrap {
+  position: relative;
+}
+
+.group-info-avatar {
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--accent-2);
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 44px; font-weight: 700; color: #fff;
+}
+
+.group-info-avatar-edit {
+  position: absolute; bottom: 2px; right: 2px;
+  width: 34px; height: 34px;
+  background: var(--bubble-out);
+  color: #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  border: 3px solid var(--bg-2);
+  transition: transform .15s;
+}
+.group-info-avatar-edit:hover { transform: scale(1.08); }
+.group-info-avatar-edit:active { transform: scale(.94); }
+
+.group-info-name {
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  margin-top: 4px;
+  word-break: break-word;
+  max-width: 90%;
+}
+
+.group-info-type {
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.group-info-type .type-badge {
+  padding: 2px 8px;
+  background: rgba(123,47,247,.2);
+  color: var(--accent-2);
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.group-info-bio {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 320px;
+  padding: 4px 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Stats row (members / admins / created) */
+.group-info-stats {
+  display: flex;
+  justify-content: space-around;
+  padding: 12px 20px;
+  margin: 0 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+/* Action buttons (Edit / Add Member / Leave) */
+.group-info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 18px;
+  justify-content: center;
+}
+.group-info-actions button {
+  font-size: 13px;
+  padding: 9px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Section title inside group info */
+.group-info-section-title {
+  padding: 8px 20px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.group-info-section-title .count-badge {
+  background: rgba(120,150,255,.15);
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ============================================================
+   MEMBERS LIST
+   ============================================================ */
+.group-members-list {
+  padding: 0 12px;
+}
+
+.group-member {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  transition: background .15s;
+  position: relative;
+}
+.group-member:hover { background: rgba(120,150,255,.1); }
+
+.group-member-avatar {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  position: relative;
+}
+.group-member-avatar img {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.group-member-body {
+  flex: 1;
+  min-width: 0;
+}
+.group-member-name {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-member-name .admin-crown {
+  font-size: 14px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(255,193,7,.5));
+}
+.group-member-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-member-you {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 1px 6px;
+  background: rgba(0,212,255,.15);
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.group-member-action {
+  flex-shrink: 0;
+}
+.group-member-action .mini-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+.group-member-action .mini-btn.kick {
+  background: rgba(255,59,92,.18);
+  color: #ff8098;
+}
+.group-member-action .mini-btn.kick:hover {
+  background: rgba(255,59,92,.3);
+}
+.group-member-action .mini-btn.promote {
+  background: rgba(255,193,7,.18);
+  color: #ffc107;
+}
+.group-member-action .mini-btn.promote:hover {
+  background: rgba(255,193,7,.3);
+}
+.group-member-action .mini-btn.demote {
+  background: rgba(120,150,255,.15);
+  color: var(--text-dim);
+}
+
+/* Long-press menu target */
+.group-member.pressing {
+  background: rgba(120,150,255,.25) !important;
+  transform: scale(.98);
+}
+
+/* ============================================================
+   GROUP INFO — DANGER ZONE (Leave Group)
+   ============================================================ */
+.group-info-danger {
+  margin: 20px 16px 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.group-info-danger button {
+  width: 100%;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ============================================================
+   GROUP PREVIEW VIEW (invite)
+   ============================================================ */
+#view-group-preview {
+  overflow-y: auto;
+  padding-bottom: 40px;
+}
+
+.group-preview-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 24px 20px;
+  gap: 14px;
+  background: linear-gradient(180deg, rgba(123,47,247,.12), transparent 80%);
+}
+
+.group-preview-avatar {
+  width: 130px; height: 130px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--accent);
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 48px; font-weight: 700; color: #fff;
+  box-shadow: 0 12px 36px rgba(0,212,255,.25);
+}
+
+.group-preview-name {
+  font-size: 24px;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: .3px;
+  word-break: break-word;
+  max-width: 90%;
+}
+
+.group-preview-inviter {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.group-preview-inviter b {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.group-preview-bio {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 340px;
+  padding: 0 20px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.group-preview-stats {
+  display: flex;
+  justify-content: space-around;
+  padding: 14px 20px;
+  margin: 16px 16px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+/* Preview members grid (small avatars) */
+.group-preview-members {
+  padding: 10px 20px 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.group-preview-member-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--surface);
+  background: var(--surface-2);
+  position: relative;
+  flex-shrink: 0;
+}
+.group-preview-member-avatar img {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.group-preview-member-avatar.more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+/* Big Join / Decline buttons */
+.group-preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 20px 20px;
+  max-width: 420px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.group-preview-actions button {
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform .15s, box-shadow .15s;
+}
+
+.btn-join-group {
+  background: var(--bubble-out);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0,212,255,.35);
+}
+.btn-join-group:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0,212,255,.45);
+}
+.btn-join-group:active { transform: translateY(0); }
+
+.btn-decline-group {
+  background: rgba(255,59,92,.15);
+  color: #ff8098;
+  border: 1px solid rgba(255,59,92,.35);
+}
+.btn-decline-group:hover {
+  background: rgba(255,59,92,.25);
+}
+
+/* Preview loader */
+.group-preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+  gap: 12px;
+}
+
+/* ============================================================
+   LOADING / EMPTY STATES
+   ============================================================ */
+.group-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+  gap: 12px;
+}
+.group-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 480px) {
+  .group-info-avatar { width: 100px; height: 100px; font-size: 38px; }
+  .group-preview-avatar { width: 110px; height: 110px; font-size: 42px; }
+  .group-info-name { font-size: 20px; }
+  .group-preview-name { font-size: 21px; }
+  .group-info-actions { padding: 0 12px 14px; }
+  .group-info-actions button { font-size: 12px; padding: 8px 12px; }
+  .group-preview-actions button { font-size: 14px; padding: 13px 18px; }
+  .group-member { padding: 9px; gap: 10px; }
+  .group-member-avatar { width: 40px; height: 40px; }
 }
