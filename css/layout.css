@@ -1,3 +1,12 @@
+/* ============================================================
+   Layout: Topbar, Views, Bottom Nav, Desktop grid.
+
+   Phase 2.3 updates:
+   1. SVG logo (bolt + "Fast S" gradient text) in topbar.
+   2. Unified .nav-icon sizing for all SVG icons.
+   3. Icon buttons adjust to SVG spacing.
+   ============================================================ */
+
 /* ===== TOPBAR ===== */
 #topbar {
   height: 56px;
@@ -7,9 +16,48 @@
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   z-index: 10;
+  gap: 8px;
 }
-.topbar-left, .topbar-right { display: flex; align-items: center; gap: 8px; }
-.topbar-title { font-weight: 700; font-size: 17px; }
+.topbar-left, .topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Fast S logo in topbar */
+.topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.topbar-bolt {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(123, 47, 247, .35));
+}
+.topbar-brand {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  background: linear-gradient(90deg, #00d4ff, #7b2ff7, #ff2e93);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+}
+
+/* Dynamic title (Chats view hides it and shows logo instead) */
+.topbar-title {
+  font-weight: 700;
+  font-size: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 
 /* Clickable title (chat view only) */
 .topbar-title[data-clickable="true"] {
@@ -29,29 +77,46 @@
   flex-shrink: 0;
 }
 
+/* Icon buttons (hold SVGs now) */
 .icon-btn {
   width: 38px; height: 38px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 10px;
-  font-size: 18px;
   transition: background .15s;
   position: relative;
+  flex-shrink: 0;
+  color: var(--text);
 }
 .icon-btn:hover { background: rgba(120,150,255,.15); }
+.icon-btn:active { background: rgba(120,150,255,.25); }
+
+/* All SVG nav icons share the same size */
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Topbar avatar */
 .topbar-avatar {
   width: 32px; height: 32px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid var(--accent);
   cursor: pointer;
+  flex-shrink: 0;
 }
+
+/* Notification badge */
 .badge {
   position: absolute;
   top: 3px; right: 3px;
   min-width: 16px; height: 16px;
   padding: 0 4px;
   background: var(--red);
-  color: #fff; font-size: 10px; font-weight: 700;
+  color: #fff;
+  font-size: 10px; font-weight: 700;
   border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
 }
@@ -87,15 +152,60 @@
 .nav-btn {
   flex: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
+  gap: 3px;
   color: var(--text-dim);
   transition: color .2s;
   padding: 6px 0;
+  cursor: pointer;
 }
-.nav-btn span { font-size: 20px; }
-.nav-btn label { font-size: 10px; font-weight: 600; }
+.nav-btn .nav-icon {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2;
+  transition: transform .15s;
+}
+.nav-btn label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .2px;
+}
 .nav-btn.active { color: var(--accent); }
-.nav-btn:active { transform: scale(.95); }
+.nav-btn.active .nav-icon { transform: scale(1.05); }
+.nav-btn:active { transform: scale(.96); }
+
+/* ===== FAB (new chat button) ===== */
+.fab-sm {
+  width: 38px; height: 38px;
+  background: var(--bubble-out);
+  color: #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 6px 16px rgba(0,212,255,.4);
+  transition: transform .15s, box-shadow .15s;
+  padding: 0;
+}
+.fab-sm:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(0,212,255,.5); }
+.fab-sm:active { transform: scale(.94); }
+.fab-sm svg { width: 20px; height: 20px; }
+
+/* ===== SEND BUTTON (already has SVG) ===== */
+.send-btn svg {
+  width: 18px;
+  height: 18px;
+  margin-right: 2px; /* nudge arrow visually centered */
+}
+
+/* ===== ATTACH BUTTON ===== */
+#attach-btn .nav-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* ===== BACK BUTTON ===== */
+#back-btn .nav-icon {
+  width: 20px;
+  height: 20px;
+}
 
 /* ===== DESKTOP ===== */
 @media (min-width: 768px) {
@@ -115,9 +225,18 @@
     padding-top: 20px;
     border-top: none;
     border-right: 1px solid var(--border);
+    align-items: stretch;
   }
-  .nav-btn { flex-direction: row; gap: 12px; justify-content: flex-start; padding: 12px 20px; }
+  .nav-btn {
+    flex-direction: row;
+    gap: 14px;
+    justify-content: flex-start;
+    padding: 12px 20px;
+    border-radius: 10px;
+    margin: 2px 8px;
+  }
   .nav-btn label { font-size: 14px; }
+  .nav-btn.active { background: rgba(0,212,255,.1); }
   #views { grid-area: main; position: relative; }
   .view { padding-bottom: 0; }
 }
